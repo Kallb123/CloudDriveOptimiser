@@ -215,6 +215,9 @@ onMounted(async () => {
     window.history.replaceState({}, '', '/')
   }
   await checkAuth()
+  if (authenticated.value) {
+    await analyseFiles()
+  }
 })
 
 onUnmounted(stopPolling)
