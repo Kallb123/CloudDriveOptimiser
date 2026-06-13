@@ -63,8 +63,15 @@ router.get('/google/callback', async (req, res) => {
     };
 
     console.log('User authenticated:', req.session.user);
+    console.log('Session ID on callback:', req.sessionID);
 
-    return res.redirect(`${FRONTEND_URL}/`);
+    return req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('Session save error:', saveErr);
+        return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
+      }
+      return res.redirect(`${FRONTEND_URL}/`);
+    });
   } catch (err) {
     console.error('OAuth callback error:', err.message);
     return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
@@ -73,10 +80,12 @@ router.get('/google/callback', async (req, res) => {
 
 // GET /auth/status — return current session user or 401
 router.get('/status', (req, res) => {
+  console.log('Session ID on status:', req.sessionID);
   console.log('Session status check:', req.session.user ? 'Authenticated' : 'Not authenticated');
   if (req.session && req.session.user) {
     return res.json({ authenticated: true, user: req.session.user });
   }
+  console.log('User not authenticated, returning 401', req.session);
   return res.status(401).json({ authenticated: false });
 });
 
