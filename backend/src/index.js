@@ -18,6 +18,10 @@ const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const isProd = process.env.NODE_ENV === 'production';
+const { version: VERSION } = require("../package.json");
+
+
+console.log(`[cloud-drive-optimiser] v${VERSION} starting`);
 
 app.use(cors({
   origin: FRONTEND_URL,

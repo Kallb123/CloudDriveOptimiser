@@ -65,6 +65,9 @@
         <JobStatus :jobs="jobList" />
       </div>
     </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">v{{ appVersion }}</footer>
   </div>
 </template>
 
@@ -73,6 +76,9 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
+
+
+const appVersion = __APP_VERSION__;
 
 const authenticated = ref(false)
 const user = ref(null)
@@ -411,5 +417,15 @@ body {
 
 .btn-secondary:not(:disabled):hover {
   background: rgba(255,255,255,0.3);
+}
+
+/* ── Footer ── */
+.app-footer {
+  text-align: center;
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  border-top: 1px solid var(--border);
 }
 </style>
