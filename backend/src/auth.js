@@ -29,6 +29,7 @@ router.get('/google', (_req, res) => {
     prompt: 'consent',
     scope: [
       'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/drive.photos.readonly',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/userinfo.email',
     ],

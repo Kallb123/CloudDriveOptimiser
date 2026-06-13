@@ -1,13 +1,13 @@
 # CloudDriveOptimiser
 
-A web application that lets you analyse your Google Drive to identify the largest files, view them with thumbnails, and optimise videos by re-encoding them at a lower resolution — all without leaving your browser.
+A web application that lets you analyse your Google Drive and Google Photos library to identify the largest files and videos, view them with thumbnails, and optimise selectable videos by re-encoding them at a lower resolution — all without leaving your browser.
 
 ---
 
 ## Features
 
 - **Google OAuth 2.0** — sign in securely with your Google account
-- **Drive analysis** — lists your largest files sorted by size, with file name, upload date, and size
+- **Drive + Photos analysis** — lists your largest Drive and Photos items sorted by size, with file name, upload date, and size
 - **Thumbnails** — optional thumbnail view for images and videos
 - **Video optimisation** — select one or more video files and re-encode them at 720 p (configurable) using FFmpeg; the original is deleted once the new file is successfully uploaded
 - **Job tracking** — real-time progress display for each transcoding job
@@ -73,6 +73,7 @@ Inside your project navigate to **APIs & Services → Library** and enable:
    - **Developer contact email**: your email
 4. On the **Scopes** step add:
    - `https://www.googleapis.com/auth/drive`
+   - `https://www.googleapis.com/auth/drive.photos.readonly`
    - `https://www.googleapis.com/auth/userinfo.profile`
    - `https://www.googleapis.com/auth/userinfo.email`
 5. Add your own Google account as a **Test user** (required while the app is in testing mode).

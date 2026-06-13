@@ -37,9 +37,10 @@ router.get('/files', requireAuth, async (req, res) => {
     const drive = getDriveClient(req.session.tokens);
     const pageSize = Math.min(parseInt(req.query.pageSize || '50', 10), MAX_FILES);
     const pageToken = req.query.pageToken || undefined;
+    const drivePageSize = pageToken ? pageSize : Math.min(MAX_FILES, pageSize * 4);
 
-    const response = await drive.files.list({
-      pageSize,
+    const driveResponse = await drive.files.list({
+      pageSize: drivePageSize,
       pageToken,
       orderBy: 'quotaBytesUsed desc',
       fields:
@@ -47,21 +48,46 @@ router.get('/files', requireAuth, async (req, res) => {
       q: 'trashed = false',
     });
 
-    const files = (response.data.files || []).map((f) => ({
-      id: f.id,
-      name: f.name,
-      size: f.size ? parseInt(f.size, 10) : 0,
-      mimeType: f.mimeType,
-      createdTime: f.createdTime,
-      modifiedTime: f.modifiedTime,
-      thumbnailLink: f.thumbnailLink || null,
-      webViewLink: f.webViewLink || null,
-      isVideo: (f.mimeType || '').startsWith('video/'),
+    const driveFiles = (driveResponse.data.files || []).map((f) => ({
+      ...f,
+      source: 'drive',
     }));
+
+    let photoFiles = [];
+    if (!pageToken) {
+      const photosResponse = await drive.files.list({
+        spaces: 'photos',
+        pageSize,
+        orderBy: 'quotaBytesUsed desc',
+        fields:
+          'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
+        q: 'trashed = false',
+      });
+      photoFiles = (photosResponse.data.files || []).map((f) => ({
+        ...f,
+        source: 'photos',
+      }));
+    }
+
+    const files = [...driveFiles, ...photoFiles]
+      .map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size ? parseInt(f.size, 10) : 0,
+        mimeType: f.mimeType,
+        createdTime: f.createdTime,
+        modifiedTime: f.modifiedTime,
+        thumbnailLink: f.thumbnailLink || null,
+        webViewLink: f.webViewLink || null,
+        isVideo: (f.mimeType || '').startsWith('video/'),
+        source: f.source,
+      }))
+      .sort((a, b) => b.size - a.size)
+      .slice(0, pageSize);
 
     return res.json({
       files,
-      nextPageToken: response.data.nextPageToken || null,
+      nextPageToken: driveResponse.data.nextPageToken || null,
     });
   } catch (err) {
     console.error('Drive files error:', err.message);
