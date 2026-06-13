@@ -15,9 +15,9 @@ jobs:
       matrix:
         include:
           - context: backend
-            image: ghcr.io/${{ github.repository }}/tracker
+            image: ghcr.io/${{ github.repository }}/backend
           - context: frontend
-            image: ghcr.io/${{ github.repository }}/ui
+            image: ghcr.io/${{ github.repository }}/frontend
 
     steps:
       - name: Checkout
