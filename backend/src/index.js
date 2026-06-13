@@ -40,7 +40,7 @@ app.use(session({
   saveUninitialized: false,
   proxy: true,
   cookie: {
-    secure: isProd,
+    secure: 'auto',
     httpOnly: true,
     sameSite: isProd ? 'strict' : 'lax',
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
