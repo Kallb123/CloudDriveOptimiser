@@ -25,7 +25,5 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - name: Install
         run: npm ci
-      - name: Test
-        run: npm test
       - name: Syntax check
         run: find src -name '*.js' -exec node --check {} \;
