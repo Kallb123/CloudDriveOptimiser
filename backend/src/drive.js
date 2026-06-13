@@ -9,6 +9,8 @@ const { createOAuthClient } = require('./auth');
 const router = express.Router();
 
 const MAX_FILES = parseInt(process.env.MAX_FILES || '200', 10);
+const FILE_FIELDS =
+  'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)';
 
 // Middleware: require authenticated session
 function requireAuth(req, res, next) {
@@ -40,12 +42,14 @@ router.get('/files', requireAuth, async (req, res) => {
     const drivePageSize = pageToken ? pageSize : Math.min(MAX_FILES, pageSize * 4);
 
     const driveResponse = await drive.files.list({
+      corpora: 'allDrives',
+      includeItemsFromAllDrives: true,
       pageSize: drivePageSize,
       pageToken,
       orderBy: 'quotaBytesUsed desc',
-      fields:
-        'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
+      fields: FILE_FIELDS,
       q: 'trashed = false',
+      supportsAllDrives: true,
     });
     console.log('Drive API responses:', driveResponse.data.files.length);
 
@@ -58,10 +62,9 @@ router.get('/files', requireAuth, async (req, res) => {
     if (!pageToken) {
       const photosResponse = await drive.files.list({
         spaces: 'photos',
-        pageSize,
+        pageSize: drivePageSize,
         orderBy: 'quotaBytesUsed desc',
-        fields:
-          'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
+        fields: FILE_FIELDS,
         q: 'trashed = false',
       });
       console.log('Photos API responses:', photosResponse.data.files.length);
@@ -108,6 +111,7 @@ router.get('/thumbnail/:fileId', requireAuth, async (req, res) => {
     const { data: meta } = await drive.files.get({
       fileId: req.params.fileId,
       fields: 'thumbnailLink',
+      supportsAllDrives: true,
     });
 
     if (!meta.thumbnailLink) {

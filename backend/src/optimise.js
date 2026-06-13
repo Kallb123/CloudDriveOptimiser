@@ -24,7 +24,7 @@ const VIDEO_PRESET = process.env.TRANSCODE_PRESET || 'medium';
 async function downloadFile(drive, fileId, destPath) {
   const dest = fs.createWriteStream(destPath);
   const response = await drive.files.get(
-    { fileId, alt: 'media' },
+    { fileId, alt: 'media', supportsAllDrives: true },
     { responseType: 'stream' }
   );
   return new Promise((resolve, reject) => {
@@ -80,6 +80,7 @@ async function uploadFile(drive, localPath, name, mimeType, parents) {
       body: fs.createReadStream(localPath),
     },
     fields: 'id, name',
+    supportsAllDrives: true,
   });
   return data;
 }
@@ -152,6 +153,7 @@ async function processJob(jobId, fileId, tokens) {
     const { data: meta } = await drive.files.get({
       fileId,
       fields: 'id, name, mimeType, parents',
+      supportsAllDrives: true,
     });
 
     job.fileName = meta.name;
@@ -186,7 +188,7 @@ async function processJob(jobId, fileId, tokens) {
 
     // --- Step 5: delete original ---
     job.status = 'deleting_original';
-    await drive.files.delete({ fileId });
+    await drive.files.delete({ fileId, supportsAllDrives: true });
 
     job.status = 'complete';
     job.newFileId = uploaded.id;
