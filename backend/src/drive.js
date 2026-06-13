@@ -44,9 +44,10 @@ router.get('/files', requireAuth, async (req, res) => {
       pageToken,
       orderBy: 'quotaBytesUsed desc',
       fields:
-        'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
+        'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
       q: 'trashed = false',
     });
+    console.log('Drive API responses:', driveResponse.data.files.length);
 
     const driveFiles = (driveResponse.data.files || []).map((f) => ({
       ...f,
@@ -60,9 +61,10 @@ router.get('/files', requireAuth, async (req, res) => {
         pageSize,
         orderBy: 'quotaBytesUsed desc',
         fields:
-          'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
+          'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)',
         q: 'trashed = false',
       });
+      console.log('Photos API responses:', photosResponse.data.files.length);
       photoFiles = (photosResponse.data.files || []).map((f) => ({
         ...f,
         source: 'photos',
@@ -73,7 +75,7 @@ router.get('/files', requireAuth, async (req, res) => {
       .map((f) => ({
         id: f.id,
         name: f.name,
-        size: f.size ? parseInt(f.size, 10) : 0,
+        size: parseInt(f.size || f.quotaBytesUsed || '0', 10),
         mimeType: f.mimeType,
         createdTime: f.createdTime,
         modifiedTime: f.modifiedTime,
