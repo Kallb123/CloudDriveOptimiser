@@ -40,15 +40,18 @@ router.get('/google', (_req, res) => {
 router.get('/google/callback', async (req, res) => {
   const { code, error } = req.query;
   if (error || !code) {
+    console.error('OAuth callback error:', error || 'No code provided');
     return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
   }
   try {
     const oAuth2Client = createOAuthClient();
+    console.log('Exchanging code for tokens...');
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
 
     // Fetch basic user profile
     const oauth2 = google.oauth2({ version: 'v2', auth: oAuth2Client });
+    console.log('Fetching user profile...');
     const { data: profile } = await oauth2.userinfo.get();
 
     req.session.tokens = tokens;
@@ -59,6 +62,8 @@ router.get('/google/callback', async (req, res) => {
       picture: profile.picture,
     };
 
+    console.log('User authenticated:', req.session.user);
+
     return res.redirect(`${FRONTEND_URL}/`);
   } catch (err) {
     console.error('OAuth callback error:', err.message);
@@ -68,6 +73,7 @@ router.get('/google/callback', async (req, res) => {
 
 // GET /auth/status — return current session user or 401
 router.get('/status', (req, res) => {
+  console.log('Session status check:', req.session.user ? 'Authenticated' : 'Not authenticated');
   if (req.session && req.session.user) {
     return res.json({ authenticated: true, user: req.session.user });
   }
