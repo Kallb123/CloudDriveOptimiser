@@ -167,6 +167,7 @@ The Vite dev server proxies `/auth` and `/api` requests to `http://localhost:300
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 > **Note**: When running locally, set `BACKEND_URL=http://localhost:3000` and `FRONTEND_URL=http://localhost:5173` in your `.env`.
+> If you run the frontend through Vite proxy, you can also set `OAUTH_REDIRECT_URI=http://localhost:5173/auth/google/callback` so the OAuth callback stays on the same origin as the browser.
 
 ---
 

@@ -20,6 +20,9 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const isProd = process.env.NODE_ENV === 'production';
 const { version: VERSION } = require("../package.json");
 
+// Trust one proxy hop so Vite dev server or a reverse proxy can preserve session cookies and secure proxy headers.
+app.set('trust proxy', 1);
+
 
 console.log(`[cloud-drive-optimiser] v${VERSION} starting`);
 
@@ -35,6 +38,7 @@ app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
     secure: isProd,
     httpOnly: true,
