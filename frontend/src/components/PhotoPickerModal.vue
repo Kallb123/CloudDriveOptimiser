@@ -62,6 +62,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'items-selected'])
 
+defineExpose({ openPicker })
+
 const isOpen = ref(props.modelValue)
 const loading = ref(false)
 const polling = ref(false)
@@ -80,9 +82,7 @@ watch(
   () => props.modelValue,
   (newValue) => {
     isOpen.value = newValue
-    if (isOpen.value) {
-      openPicker()
-    } else {
+    if (!isOpen.value) {
       cleanupPicker()
     }
   }
@@ -98,6 +98,32 @@ async function openPicker() {
     pickerCompleted.value = false
     selectedCount.value = 0
 
+    if (!isOpen.value) {
+      isOpen.value = true
+      emit('update:modelValue', true)
+    }
+
+    popupWindow.value = window.open(
+      '',
+      'googlePhotosPicker',
+      'width=900,height=700,noopener,noreferrer'
+    )
+
+    if (!popupWindow.value) {
+      loading.value = false
+      popupBlocked.value = true
+      error.value = 'Popup blocked. Please open the picker in a new tab.'
+      return
+    }
+
+    try {
+      if (popupWindow.value.document) {
+        popupWindow.value.document.write('<p style="font-family: sans-serif; padding: 1rem;">Opening Google Photos Picker…</p>')
+      }
+    } catch (_err) {
+      // Some browsers prevent writing to a window opened with noopener/noreferrer.
+    }
+
     const { data } = await axios.post(
       '/api/drive/picker/create-session',
       {},
@@ -111,9 +137,8 @@ async function openPicker() {
     pickerUri.value = data.pickerUri
     sessionId.value = data.sessionId
 
-    loading.value = false
-
     openPickerWindow()
+    loading.value = false
   } catch (err) {
     loading.value = false
     error.value =
@@ -130,11 +155,23 @@ function openPickerWindow() {
     return
   }
 
-  popupWindow.value = window.open(
-    pickerUri.value,
-    'googlePhotosPicker',
-    'width=900,height=700,noopener,noreferrer'
-  )
+  if (!popupWindow.value) {
+    popupWindow.value = window.open(
+      pickerUri.value,
+      'googlePhotosPicker',
+      'width=900,height=700,noopener,noreferrer'
+    )
+  } else {
+    try {
+      popupWindow.value.location.href = pickerUri.value
+    } catch (_err) {
+      popupWindow.value = window.open(
+        pickerUri.value,
+        'googlePhotosPicker',
+        'width=900,height=700,noopener,noreferrer'
+      )
+    }
+  }
 
   if (!popupWindow.value) {
     popupBlocked.value = true

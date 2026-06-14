@@ -75,6 +75,7 @@
 
       <!-- Photo Picker Modal -->
       <PhotoPickerModal
+        ref="photoPickerRef"
         v-model="pickerModalOpen"
         @items-selected="handlePhotosSelected"
       />
@@ -106,6 +107,7 @@ const nextPageToken = ref(null)
 const jobList = ref([])
 const authError = ref(false)
 const pickerModalOpen = ref(false)
+const photoPickerRef = ref(null)
 
 let pollInterval = null
 
@@ -171,7 +173,8 @@ async function loadMore() {
 // ---- Photo Picker ----
 
 function openPhotoPicker() {
-  pickerModalOpen.value = true
+  error.value = null
+  photoPickerRef.value?.openPicker()
 }
 
 function handlePhotosSelected(photoFiles) {
