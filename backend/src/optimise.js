@@ -131,13 +131,15 @@ async function getPhotoMediaItem(tokens, mediaItemId) {
     });
     return data;
   } catch (err) {
-    throw new Error(getApiErrorMessage(err, 'Failed to fetch Google Photos media item'));
+    throw new Error(getApiErrorMessage(err, `Failed to fetch Google Photos media item ${mediaItemId}`));
   }
 }
 
 async function downloadPhotoVideo(tokens, mediaItem, destPath) {
   if (!mediaItem.baseUrl) {
-    throw new Error(`Google Photos item "${mediaItem.filename || mediaItem.id}" is missing a download URL`);
+    throw new Error(
+      `Google Photos item "${mediaItem.filename || mediaItem.id}" is missing a download URL. The item may not be fully processed yet or may be inaccessible.`
+    );
   }
 
   const headers = await getPhotosRequestHeaders(tokens);
@@ -180,7 +182,9 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) 
   }
 
   if (!uploadToken) {
-    throw new Error('Google Photos upload did not return an upload token');
+    throw new Error(
+      'Google Photos upload did not return an upload token. This may indicate an API quota limit, authentication issue, or service unavailability.'
+    );
   }
 
   try {
@@ -235,8 +239,8 @@ router.post('/start', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'items must be a non-empty array' });
   }
 
-  if (items.some((item) => !item?.id || !['drive', 'photos'].includes(item.source || 'drive'))) {
-    return res.status(400).json({ error: 'each item must include an id and a valid source (drive or photos)' });
+  if (items.some((item) => !item?.id || (item.source && !['drive', 'photos'].includes(item.source)))) {
+    return res.status(400).json({ error: 'each item must include an id; source, when provided, must be drive or photos' });
   }
 
   const jobIds = items.map(({ id: fileId, source = 'drive' }) => {

@@ -129,7 +129,7 @@ function checkboxTitle(file) {
 }
 
 function formatSize(bytes) {
-  if (!bytes) return '—'
+  if (bytes == null) return '—'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let val = bytes
   let i = 0
