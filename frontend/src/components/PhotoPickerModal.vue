@@ -106,7 +106,7 @@ async function openPicker() {
     popupWindow.value = window.open(
       '',
       'googlePhotosPicker',
-      'width=900,height=700,noopener,noreferrer'
+      'width=900,height=700'
     )
 
     if (!popupWindow.value) {
@@ -121,7 +121,7 @@ async function openPicker() {
         popupWindow.value.document.write('<p style="font-family: sans-serif; padding: 1rem;">Opening Google Photos Picker…</p>')
       }
     } catch (_err) {
-      // Some browsers prevent writing to a window opened with noopener/noreferrer.
+      // Some browsers prevent writing to a popup window.
     }
 
     const { data } = await axios.post(
@@ -155,28 +155,27 @@ function openPickerWindow() {
     return
   }
 
-  if (!popupWindow.value) {
+  if (popupWindow.value && !popupWindow.value.closed) {
+    try {
+      popupWindow.value.location.href = pickerUri.value
+      popupWindow.value.focus()
+    } catch (_err) {
+      popupBlocked.value = false
+      error.value = 'Unable to load the picker in the opened popup. Please refresh and try again.'
+      return
+    }
+  } else {
     popupWindow.value = window.open(
       pickerUri.value,
       'googlePhotosPicker',
-      'width=900,height=700,noopener,noreferrer'
+      'width=900,height=700'
     )
-  } else {
-    try {
-      popupWindow.value.location.href = pickerUri.value
-    } catch (_err) {
-      popupWindow.value = window.open(
-        pickerUri.value,
-        'googlePhotosPicker',
-        'width=900,height=700,noopener,noreferrer'
-      )
-    }
-  }
 
-  if (!popupWindow.value) {
-    popupBlocked.value = true
-    error.value = 'Popup blocked. Please open the picker in a new tab.'
-    return
+    if (!popupWindow.value) {
+      popupBlocked.value = true
+      error.value = 'Popup blocked. Please open the picker in a new tab.'
+      return
+    }
   }
 
   polling.value = true
