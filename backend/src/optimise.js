@@ -236,7 +236,7 @@ router.post('/start', requireAuth, async (req, res) => {
   }
 
   if (items.some((item) => !item?.id || !['drive', 'photos'].includes(item.source || 'drive'))) {
-    return res.status(400).json({ error: 'each item must include an id and a valid source' });
+    return res.status(400).json({ error: 'each item must include an id and a valid source (drive or photos)' });
   }
 
   const jobIds = items.map(({ id: fileId, source = 'drive' }) => {
