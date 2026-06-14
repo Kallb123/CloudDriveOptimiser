@@ -178,9 +178,8 @@ router.get('/files', requireAuth, async (req, res) => {
     const statusCode = err.response?.status || 500;
     console.error('Drive files error:', apiError, errorDetails);
     
-    // Return appropriate HTTP status: 403 for auth errors, 500 for other errors
-    const responseStatus = statusCode === 403 ? 403 : 500;
-    return res.status(responseStatus).json({ error: 'Failed to list Drive files', details: apiError });
+    // Return 403 for auth errors, 500 for other errors
+    return res.status(statusCode === 403 ? 403 : 500).json({ error: 'Failed to list Drive files', details: apiError });
   }
 });
 
