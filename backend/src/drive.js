@@ -10,8 +10,6 @@ const { createOAuthClient } = require('./auth');
 const router = express.Router();
 
 const MAX_FILES = parseInt(process.env.MAX_FILES || '200', 10);
-const PHOTOS_PAGE_SIZE = 100;
-const PHOTOS_SEARCH_URL = 'https://photoslibrary.googleapis.com/v1/mediaItems:search';
 const FILE_FIELDS =
   'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)';
 
@@ -94,45 +92,6 @@ function mapPhotoMediaItem(mediaItem) {
   };
 }
 
-async function fetchPhotoCandidates(tokens, candidateCount) {
-  const oAuth2Client = getAuthClient(tokens);
-  const mediaItems = [];
-  let nextPageToken;
-
-  try {
-    while (mediaItems.length < candidateCount) {
-      const { token: accessToken } = await oAuth2Client.getAccessToken();
-      const response = await axios.post(
-        PHOTOS_SEARCH_URL,
-        {
-          pageSize: Math.min(PHOTOS_PAGE_SIZE, candidateCount - mediaItems.length),
-          ...(nextPageToken ? { pageToken: nextPageToken } : {}),
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const items = response.data.mediaItems || [];
-      mediaItems.push(...items);
-
-      if (!response.data.nextPageToken || items.length === 0) {
-        break;
-      }
-
-      nextPageToken = response.data.nextPageToken;
-    }
-  } catch (err) {
-    const apiMessage = err.response?.data?.error?.message;
-    throw new Error(apiMessage || err.message);
-  }
-
-  console.log('Photos Library API media items fetched:', mediaItems.length);
-  return mediaItems.map(mapPhotoMediaItem);
-}
 
 /**
  * GET /api/drive/files
@@ -161,12 +120,9 @@ router.get('/files', requireAuth, async (req, res) => {
 
     const driveFiles = (driveResponse.data.files || []).map(mapDriveFile);
 
-    let photoFiles = [];
-    if (!pageToken) {
-      photoFiles = await fetchPhotoCandidates(req.session.tokens, drivePageSize);
-    }
-
-    const files = [...driveFiles, ...photoFiles].sort((a, b) => b.size - a.size).slice(0, pageSize);
+    // Note: Google Photos videos are now selected via the Photo Picker API
+    // (see /api/drive/picker/create-session and /api/drive/picker/get-items)
+    const files = driveFiles.slice(0, pageSize);
 
     return res.json({
       files,
@@ -235,6 +191,94 @@ router.get('/thumbnail/:fileId', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Thumbnail error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch thumbnail' });
+  }
+});
+
+/**
+ * POST /api/drive/picker/create-session
+ * Creates a Google Photos Picker session and returns the pickerUri and sessionId.
+ * The frontend will open the pickerUri in an iframe and listen for completion.
+ */
+router.post('/picker/create-session', requireAuth, async (req, res) => {
+  try {
+    const oAuth2Client = getAuthClient(req.session.tokens);
+    const { token: accessToken } = await oAuth2Client.getAccessToken();
+
+    // Call Google's photoPicker API to create a picker session
+    const response = await axios.post(
+      'https://photospicker.googleapis.com/v1/sessions',
+      {
+        features: ['MULTI_SELECT'],
+        displayMode: 'PICKER',
+      },
+      {
+        headers: {
+          Authorization: 'Bearer ' + accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const { pickerUri, sessionId } = response.data;
+
+    if (!pickerUri || !sessionId) {
+      return res.status(500).json({
+        error: 'Google Photos Picker session creation failed: missing pickerUri or sessionId',
+      });
+    }
+
+    console.log('Photos Picker session created:', sessionId);
+    return res.json({ pickerUri, sessionId });
+  } catch (err) {
+    const apiMessage = err.response?.data?.error?.message;
+    console.error('Photos Picker session creation error:', apiMessage || err.message);
+    return res.status(err.response?.status || 500).json({
+      error: apiMessage || 'Failed to create Google Photos Picker session',
+    });
+  }
+});
+
+/**
+ * POST /api/drive/picker/get-items
+ * Retrieves the selected media items from the picker session.
+ * The frontend calls this after the user completes the picker flow.
+ */
+router.post('/picker/get-items', requireAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId in request body' });
+    }
+
+    const oAuth2Client = getAuthClient(req.session.tokens);
+    const { token: accessToken } = await oAuth2Client.getAccessToken();
+
+    // Call Google's photoPicker API to get selected items
+    const response = await axios.post(
+      'https://photospicker.googleapis.com/v1/sessions/' + encodeURIComponent(sessionId) + ':getResult',
+      {},
+      {
+        headers: {
+          Authorization: 'Bearer ' + accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const { mediaItems = [] } = response.data;
+
+    // Map the media items to our standard format
+    const mappedItems = mediaItems.map(mapPhotoMediaItem);
+
+    console.log('Photos Picker items retrieved:', mappedItems.length);
+    return res.json({ files: mappedItems });
+  } catch (err) {
+    const apiMessage = err.response?.data?.error?.message;
+    console.error('Photos Picker get-items error:', apiMessage || err.message);
+    return res.status(err.response?.status || 500).json({
+      error: apiMessage || 'Failed to retrieve selected items from Google Photos Picker',
+    });
   }
 });
 

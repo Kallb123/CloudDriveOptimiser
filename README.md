@@ -7,7 +7,8 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 ## Features
 
 - **Google OAuth 2.0** — sign in securely with your Google account
-- **Drive + Photos analysis** — lists your largest Drive and Photos items sorted by size, with file name, upload date, and size
+- **Drive analysis** — lists your largest Drive items sorted by size, with file name, upload date, and size
+- **Google Photos Picker** — select specific videos from your Google Photos library using the official Google Photos Picker API
 - **Thumbnails** — optional thumbnail view for images and videos
 - **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720 p (configurable) using FFmpeg
 - **Job tracking** — real-time progress display for each transcoding job
@@ -30,8 +31,10 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 │  • Google OAuth flow                 │
 │  • Drive API (list / download /      │
 │    upload / delete)                  │
-│  • Photos Library API (list /        │
-│    download / upload)                │
+│  • Photos Picker API (session        │
+│    creation / item retrieval)        │
+│  • Photos Library API (download /    │
+│    upload for selected items)        │
 │  • FFmpeg transcoding jobs           │
 └──────────────────────────────────────┘
 ```
@@ -66,6 +69,7 @@ Inside your project navigate to **APIs & Services → Library** and enable:
 - **Google Drive API**
 - **Google Photos Library API**
 - **Google People API** (for profile information)
+- **Photos Picker API** (for the new photo picker functionality)
 
 ### 3 — Configure the OAuth consent screen
 
@@ -181,18 +185,19 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 1. Open the application in your browser.
 2. Click **Sign in with Google** and grant the requested Drive and Google Photos permissions.
-3. Click **Analyse library** to fetch your largest Drive files and Google Photos media items.
-4. Toggle **Show thumbnails** to preview images and videos inline.
-5. Check the boxes next to one or more **video** files from Drive or Google Photos.
-6. Click **Optimise selected** to begin the transcoding pipeline:
+3. Click **Analyse library** to fetch your largest Drive files.
+4. (Optional) Click **Select Photos Videos** to open the Google Photos Picker and choose specific videos from your Google Photos library.
+5. Toggle **Show thumbnails** to preview images and videos inline.
+6. Check the boxes next to one or more **video** files from Drive or Google Photos.
+7. Click **Optimise selected** to begin the transcoding pipeline:
    - The video is downloaded from Drive or Google Photos.
    - FFmpeg re-encodes it at the configured resolution and quality.
    - Embedded metadata is copied onto the optimised MP4.
    - Drive videos are uploaded back to the same folder in Drive and the original is deleted automatically.
    - Google Photos videos are uploaded back into Google Photos as new items.
-7. The **Optimisation Jobs** panel shows real-time progress for each file.
-8. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
-9. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
+8. The **Optimisation Jobs** panel shows real-time progress for each file.
+9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
+10. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
 
 ---
 
