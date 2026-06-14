@@ -17,8 +17,8 @@ const FILE_FIELDS =
 
 // API display name mapping for consistent error messages
 const API_DISPLAY_NAMES = {
-  photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Photos' },
-  drive: { shortName: 'Drive', fullName: 'Google Drive API', fileType: 'Drive' },
+  photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileTypeLabel: 'Photos' },
+  drive: { shortName: 'Drive', fullName: 'Google Drive API', fileTypeLabel: 'Drive' },
 };
 
 // Middleware: require authenticated session
@@ -187,13 +187,14 @@ router.get('/files', requireAuth, async (req, res) => {
     const statusCode = err.response?.status || err.status || 500;
     const errorSource = err.source || 'drive';
     
-    const apiNames = API_DISPLAY_NAMES[errorSource] || API_DISPLAY_NAMES.drive;
+    // errorSource is always 'drive' or 'photos' due to default and explicit source setting
+    const apiNames = API_DISPLAY_NAMES[errorSource];
     
     console.error(`${apiNames.shortName} API error:`, apiError, errorDetails);
     
     // Determine appropriate status code and message based on error type
     let responseStatus = statusCode;
-    let errorMessage = `Failed to list ${apiNames.fileType} files`;
+    let errorMessage = `Failed to list ${apiNames.fileTypeLabel} files`;
     
     if (statusCode === 403) {
       // Check if the error is specifically about insufficient scopes using Google API error properties
