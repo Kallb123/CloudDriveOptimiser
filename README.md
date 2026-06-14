@@ -77,6 +77,7 @@ Inside your project navigate to **APIs & Services → Library** and enable:
    - **Developer contact email**: your email
 4. On the **Scopes** step add:
    - `https://www.googleapis.com/auth/drive`
+   - `https://www.googleapis.com/auth/drive.readonly`
    - `https://www.googleapis.com/auth/photoslibrary.appendonly`
    - `https://www.googleapis.com/auth/photoslibrary.readonly`
    - `https://www.googleapis.com/auth/userinfo.profile`
