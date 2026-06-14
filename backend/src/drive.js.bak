@@ -92,6 +92,45 @@ function mapPhotoMediaItem(mediaItem) {
   };
 }
 
+async function fetchPhotoCandidates(tokens, candidateCount) {
+  const oAuth2Client = getAuthClient(tokens);
+  const mediaItems = [];
+  let nextPageToken;
+
+  try {
+    while (mediaItems.length < candidateCount) {
+      const { token: accessToken } = await oAuth2Client.getAccessToken();
+      const response = await axios.post(
+        PHOTOS_SEARCH_URL,
+        {
+          pageSize: Math.min(PHOTOS_PAGE_SIZE, candidateCount - mediaItems.length),
+          ...(nextPageToken ? { pageToken: nextPageToken } : {}),
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const items = response.data.mediaItems || [];
+      mediaItems.push(...items);
+
+      if (!response.data.nextPageToken || items.length === 0) {
+        break;
+      }
+
+      nextPageToken = response.data.nextPageToken;
+    }
+  } catch (err) {
+    const apiMessage = err.response?.data?.error?.message;
+    throw new Error(apiMessage || err.message);
+  }
+
+  console.log('Photos Library API media items fetched:', mediaItems.length);
+  return mediaItems.map(mapPhotoMediaItem);
+}
 
 /**
  * GET /api/drive/files
