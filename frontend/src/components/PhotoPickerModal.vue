@@ -8,10 +8,18 @@
       </div>
 
       <div class="modal-body">
-        <!-- Loading state -->
+        <!-- Loading / polling state -->
         <div v-if="loading" class="loading-state">
           <div class="spinner"></div>
-          <p>Opening Google Photos Picker...</p>
+          <p>Opening Google Photos Picker in a secure popup...</p>
+          <p>Please complete your selection in the popup window.</p>
+        </div>
+
+        <!-- Polling status -->
+        <div v-else-if="polling" class="loading-state">
+          <div class="spinner"></div>
+          <p>Waiting for Google Photos selection to complete...</p>
+          <p v-if="popupClosed">It looks like the popup was closed before completion.</p>
         </div>
 
         <!-- Error state -->
@@ -22,24 +30,14 @@
           </button>
         </div>
 
-        <!-- Picker iframe -->
-        <iframe
-          v-if="pickerUri && !loading && !error"
-          :src="pickerUri"
-          class="picker-frame"
-          sandbox="allow-same-origin allow-scripts"
-          title="Google Photos Picker"
-        />
-
-        <!-- No items selected message -->
-        <div v-if="pickerCompleted && selectedCount === 0" class="no-selection">
-          <p>No items selected. Please try again.</p>
+        <!-- Fallback open tab button -->
+        <div v-if="popupBlocked && !loading && !polling" class="blocked-state">
+          <p>Your browser blocked the popup. Please open the picker in a new tab.</p>
+          <button class="btn btn-primary" @click="openPickerInTab">
+            Open Picker in New Tab
+          </button>
         </div>
 
-        <!-- Summary of selected items -->
-        <div v-if="pickerCompleted && selectedCount > 0" class="selection-summary">
-          <p>Selected <strong>{{ selectedCount }}</strong> item(s) from Google Photos.</p>
-        </div>
       </div>
 
       <div class="modal-footer">
@@ -47,14 +45,7 @@
           class="btn btn-secondary"
           @click="closeModal"
         >
-          {{ pickerCompleted ? 'Close' : 'Cancel' }}
-        </button>
-        <button
-          v-if="pickerCompleted && selectedCount > 0"
-          class="btn btn-primary"
-          @click="confirmSelection"
-        >
-          Add to Library
+          Cancel
         </button>
       </div>
     </div>
@@ -62,7 +53,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import axios from 'axios'
 
 const props = defineProps({
@@ -73,21 +64,26 @@ const emit = defineEmits(['update:modelValue', 'items-selected'])
 
 const isOpen = ref(props.modelValue)
 const loading = ref(false)
+const polling = ref(false)
+const popupBlocked = ref(false)
+const popupClosed = ref(false)
 const error = ref(null)
 const pickerUri = ref(null)
 const sessionId = ref(null)
 const pickerCompleted = ref(false)
 const selectedCount = ref(0)
+const popupWindow = ref(null)
+let pollTimer = null
 
 // Watch for external changes to the modal value
-let messageHandler = null
-
 watch(
   () => props.modelValue,
   (newValue) => {
     isOpen.value = newValue
     if (isOpen.value) {
       openPicker()
+    } else {
+      cleanupPicker()
     }
   }
 )
@@ -95,16 +91,17 @@ watch(
 async function openPicker() {
   try {
     loading.value = true
+    polling.value = false
+    popupBlocked.value = false
+    popupClosed.value = false
     error.value = null
     pickerCompleted.value = false
     selectedCount.value = 0
 
-    // Call backend to create picker session
     const { data } = await axios.post(
       '/api/drive/picker/create-session',
       {},
       {
-        withCredentials: true,
         headers: {
           'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
         },
@@ -114,10 +111,9 @@ async function openPicker() {
     pickerUri.value = data.pickerUri
     sessionId.value = data.sessionId
 
-    // Listen for picker completion message
-    setupPostMessageListener()
-
     loading.value = false
+
+    openPickerWindow()
   } catch (err) {
     loading.value = false
     error.value =
@@ -128,91 +124,131 @@ async function openPicker() {
   }
 }
 
-function setupPostMessageListener() {
-  messageHandler = (event) => {
-    // Verify message origin comes from Google
-    if (!event.origin.includes('google.com')) {
-      console.warn('Received message from untrusted origin:', event.origin)
-      return
-    }
-
-    if (event.data?.type === 'SELECTION_COMPLETE') {
-      console.log('Picker selection completed')
-      pickerCompleted.value = true
-      selectedCount.value = event.data?.count || 0
-      // Remove listener after completion
-      if (messageHandler) {
-        window.removeEventListener('message', messageHandler)
-        messageHandler = null
-      }
-    }
+function openPickerWindow() {
+  if (!pickerUri.value) {
+    error.value = 'Missing picker URI from backend.'
+    return
   }
 
-  window.addEventListener('message', messageHandler)
+  popupWindow.value = window.open(
+    pickerUri.value,
+    'googlePhotosPicker',
+    'width=900,height=700,noopener,noreferrer'
+  )
+
+  if (!popupWindow.value) {
+    popupBlocked.value = true
+    error.value = 'Popup blocked. Please open the picker in a new tab.'
+    return
+  }
+
+  polling.value = true
+  startStatusPolling()
 }
 
-async function confirmSelection() {
-  try {
-    loading.value = true
-    error.value = null
+function openPickerInTab() {
+  if (!pickerUri.value) return
+  popupWindow.value = window.open(pickerUri.value, '_blank', 'noopener,noreferrer')
+  popupBlocked.value = false
+  error.value = null
+  if (popupWindow.value) {
+    polling.value = true
+    startStatusPolling()
+  }
+}
 
-    // Call backend to get selected items using sessionId
+function startStatusPolling() {
+  stopStatusPolling()
+  pollTimer = setInterval(checkPickerStatus, 2000)
+  checkPickerStatus()
+}
+
+function stopStatusPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function checkPickerStatus() {
+  if (popupWindow.value && popupWindow.value.closed) {
+    popupClosed.value = true
+  }
+
+  if (popupClosed.value && !pickerCompleted.value) {
+    stopStatusPolling()
+    polling.value = false
+    error.value = 'Picker popup closed before selection completed.'
+    return
+  }
+
+  try {
     const { data } = await axios.post(
-      '/api/drive/picker/get-items',
+      '/api/drive/picker/status',
       { sessionId: sessionId.value },
       {
-        withCredentials: true,
         headers: {
           'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
         },
       }
     )
 
+    if (!data.done) {
+      return
+    }
+
     const files = data.files || []
-    console.log('Picker items retrieved:', files.length)
+    selectedCount.value = data.selectedCount || files.length
+    pickerCompleted.value = true
+    polling.value = false
+    stopStatusPolling()
 
-    // Emit selected items to parent
     emit('items-selected', files)
-
-    // Close the modal
     closeModal()
   } catch (err) {
+    stopStatusPolling()
+    polling.value = false
+    loading.value = false
     error.value =
       err.response?.data?.error ||
       err.message ||
-      'Failed to retrieve selected items'
-    console.error('Get items error:', error.value)
-    loading.value = false
+      'Failed to poll Google Photos Picker status'
+    console.error('Picker status error:', error.value)
   }
 }
 
 function retry() {
+  cleanupPicker()
   error.value = null
   pickerUri.value = null
   pickerCompleted.value = false
+  selectedCount.value = 0
   openPicker()
+}
+
+function cleanupPicker() {
+  stopStatusPolling()
+  if (popupWindow.value && !popupWindow.value.closed) {
+    popupWindow.value.close()
+  }
+  popupWindow.value = null
 }
 
 function closeModal() {
   isOpen.value = false
+  cleanupPicker()
   pickerUri.value = null
   sessionId.value = null
   pickerCompleted.value = false
   error.value = null
-  // Clean up message listener
-  if (messageHandler) {
-    window.removeEventListener('message', messageHandler)
-    messageHandler = null
-  }
+  popupBlocked.value = false
+  popupClosed.value = false
+  selectedCount.value = 0
   emit('update:modelValue', false)
 }
 
 onUnmounted(() => {
-  // Ensure listener is removed when component is unmounted
-  if (messageHandler) {
-    window.removeEventListener('message', messageHandler)
-    messageHandler = null
-  }
+  cleanupPicker()
 })
 </script>
 
