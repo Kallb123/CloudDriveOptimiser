@@ -178,8 +178,19 @@ router.get('/files', requireAuth, async (req, res) => {
     const statusCode = err.response?.status || 500;
     console.error('Drive files error:', apiError, errorDetails);
     
-    // Return 403 for auth errors, 500 for other errors
-    return res.status(statusCode === 403 ? 403 : 500).json({ error: 'Failed to list Drive files', details: apiError });
+    // Determine appropriate status code and message based on error type
+    let responseStatus = statusCode;
+    let errorMessage = 'Failed to list Drive files';
+    
+    if (statusCode === 403) {
+      errorMessage = 'Authentication failed: insufficient scopes. Ensure all required scopes are configured in Google Cloud Console and re-authenticate.';
+    } else if (statusCode === 401) {
+      errorMessage = 'Authentication failed: invalid or expired credentials.';
+    } else if (statusCode >= 500) {
+      responseStatus = 500;
+    }
+    
+    return res.status(responseStatus).json({ error: errorMessage, details: apiError });
   }
 });
 
