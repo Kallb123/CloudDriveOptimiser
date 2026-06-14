@@ -50,7 +50,8 @@ function estimatePhotoSize(mediaItem) {
   const pixelCount = width > 0 && height > 0 ? width * height : 0;
 
   if ((mediaItem.mimeType || '').startsWith('video/')) {
-    const duration = Math.max(parseDurationSeconds(metadata.video?.duration), 1);
+    const duration = parseDurationSeconds(metadata.video?.duration);
+    if (duration <= 0) return 0;
     return pixelCount > 0 ? Math.round(pixelCount * duration) : Math.round(duration);
   }
 
@@ -124,7 +125,7 @@ async function fetchPhotoCandidates(tokens, candidateCount) {
     nextPageToken = response.data.nextPageToken;
   }
 
-  console.log('Photos Library API responses:', mediaItems.length);
+  console.log('Photos Library API media items fetched:', mediaItems.length);
   return mediaItems.map(mapPhotoMediaItem);
 }
 
