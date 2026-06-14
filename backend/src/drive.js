@@ -17,8 +17,8 @@ const FILE_FIELDS =
 
 // API display name mapping for consistent error messages
 const API_DISPLAY_NAMES = {
-  photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileTypeLabel: 'Photos' },
-  drive: { shortName: 'Drive', fullName: 'Google Drive API', fileTypeLabel: 'Drive' },
+  photos: { shortName: 'Photos', fullName: 'Google Photos Library API' },
+  drive: { shortName: 'Drive', fullName: 'Google Drive API' },
 };
 
 // Middleware: require authenticated session
@@ -135,7 +135,7 @@ async function fetchPhotoCandidates(tokens, candidateCount) {
     const apiMessage = err.response?.data?.error?.message;
     const photoError = new Error(apiMessage || err.message);
     photoError.source = 'photos';
-    photoError.status = err.response?.status;
+    photoError.response = err.response;
     throw photoError;
   }
 
@@ -184,7 +184,7 @@ router.get('/files', requireAuth, async (req, res) => {
   } catch (err) {
     const apiError = err.response?.data?.error?.message || err.message;
     const errorDetails = err.response?.data?.error || {};
-    const statusCode = err.response?.status || err.status || 500;
+    const statusCode = err.response?.status || 500;
     const errorSource = err.source || 'drive';
     
     // errorSource is always 'drive' or 'photos' due to default and explicit source setting
@@ -194,7 +194,7 @@ router.get('/files', requireAuth, async (req, res) => {
     
     // Determine appropriate status code and message based on error type
     let responseStatus = statusCode;
-    let errorMessage = `Failed to list ${apiNames.fileTypeLabel} files`;
+    let errorMessage = `Failed to list ${apiNames.shortName} files`;
     
     if (statusCode === 403) {
       // Check if the error is specifically about insufficient scopes using Google API error properties
