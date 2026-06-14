@@ -216,9 +216,13 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
       }
     );
 
-    const { pickerUri, id: sessionId } = response.data;
+    const rawSessionId = response.data.sessionId || response.data.id || null;
+    const sessionId = rawSessionId || (typeof response.data.name === 'string'
+      ? response.data.name.split('/').pop()
+      : null);
 
     if (!pickerUri || !sessionId) {
+      console.error('Photos Picker session creation response missing fields:', response.data);
       return res.status(500).json({
         error: 'Google Photos Picker session creation failed: missing pickerUri or sessionId',
       });
@@ -236,19 +240,29 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
 });
 
 async function fetchPickerResult(sessionId, accessToken) {
-  const response = await axios.post(
-    'https://photospicker.googleapis.com/v1/sessions/' +
-      encodeURIComponent(sessionId) +
-      ':getResult',
-    {},
-    {
-      headers: {
-        Authorization: 'Bearer ' + accessToken,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  return response.data;
+  try {
+    const response = await axios.post(
+      'https://photospicker.googleapis.com/v1/sessions/' +
+        encodeURIComponent(sessionId) +
+        ':getResult',
+      {},
+      {
+        headers: {
+          Authorization: 'Bearer ' + accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (err) {
+    const status = err.response?.status;
+    const apiMessage = err.response?.data?.error?.message || err.message;
+    console.error(
+      `Google Photos Picker getResult error (session=${sessionId}, status=${status}):`,
+      apiMessage
+    );
+    throw err;
+  }
 }
 
 /**
