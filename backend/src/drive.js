@@ -183,14 +183,24 @@ router.get('/files', requireAuth, async (req, res) => {
     let errorMessage = 'Failed to list Drive files';
     
     if (statusCode === 403) {
-      errorMessage = 'Authentication failed: insufficient scopes. Ensure all required scopes are configured in Google Cloud Console and re-authenticate.';
+      // Check if the error is specifically about insufficient scopes
+      if (apiError && apiError.toLowerCase().includes('insufficient') && apiError.toLowerCase().includes('scope')) {
+        errorMessage = 'Authentication failed: insufficient scopes. Ensure all required scopes are configured in Google Cloud Console and re-authenticate.';
+      } else {
+        errorMessage = 'Access denied by Google Drive API.';
+      }
     } else if (statusCode === 401) {
       errorMessage = 'Authentication failed: invalid or expired credentials.';
     } else if (statusCode >= 500) {
       responseStatus = 500;
     }
     
-    return res.status(responseStatus).json({ error: errorMessage, details: apiError });
+    const response = { error: errorMessage };
+    // Only include debug details in development mode
+    if (process.env.NODE_ENV !== 'production') {
+      response.details = apiError;
+    }
+    return res.status(responseStatus).json(response);
   }
 });
 
