@@ -173,8 +173,10 @@ router.get('/files', requireAuth, async (req, res) => {
       nextPageToken: driveResponse.data.nextPageToken || null,
     });
   } catch (err) {
-    console.error('Drive files error:', err.message);
-    return res.status(500).json({ error: 'Failed to list Drive files' });
+    const apiError = err.response?.data?.error?.message || err.message;
+    const errorDetails = err.response?.data?.error || {};
+    console.error('Drive files error:', apiError, errorDetails);
+    return res.status(500).json({ error: 'Failed to list Drive files', details: apiError });
   }
 });
 
