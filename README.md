@@ -243,6 +243,7 @@ CloudDriveOptimiser/
 |---------|-------------|-----|
 | "Authentication failed" after Google login | Redirect URI mismatch | Ensure `BACKEND_URL/auth/google/callback` is listed in Google Console |
 | Files list is empty | Required Google APIs not enabled | Enable the Drive API and Google Photos Library API in Google Cloud Console |
+| "Drive files error: Request had insufficient authentication scopes" | OAuth scopes not configured in Google Cloud Console | Ensure all required scopes are added to the OAuth consent screen (see Google Cloud Setup section). Re-authenticate with the application after updating scopes. |
 | Optimisation fails: "not a video" | File MIME type is not `video/*` | Only video files can be optimised |
 | FFmpeg not found | Missing in container | Rebuild with `docker compose build --no-cache` |
 | Session lost on backend restart | No persistent session store | For production, configure a Redis session store |
