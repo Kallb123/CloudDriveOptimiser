@@ -21,7 +21,7 @@
       <!-- Not authenticated -->
       <div v-if="!authenticated" class="login-card">
         <h1>CloudDriveOptimiser</h1>
-        <p>Analyse your Google Drive, find large files, and optimise videos to save space.</p>
+        <p>Analyse your Google Drive and Google Photos library, find large videos, and optimise them to save space.</p>
         <div v-if="authError" class="alert alert-error">
           Authentication failed. Please try again.
         </div>
@@ -39,13 +39,13 @@
       <!-- Authenticated -->
       <div v-else class="dashboard">
         <div class="dashboard-header">
-          <h2>Your Google Drive — Largest Files</h2>
+          <h2>Your Drive + Photos — Largest Media</h2>
           <button
             class="btn btn-primary"
             :disabled="loading"
             @click="analyseFiles"
           >
-            {{ loading ? 'Analysing…' : analysed ? 'Re-analyse' : 'Analyse Drive' }}
+            {{ loading ? 'Analysing…' : analysed ? 'Re-analyse' : 'Analyse library' }}
           </button>
         </div>
 
@@ -154,19 +154,20 @@ async function loadMore() {
 
 // ---- Optimisation ----
 
-async function startOptimise(fileIds) {
+async function startOptimise(items) {
   error.value = null
   optimising.value = true
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
-      { fileIds },
+      { items },
       { withCredentials: true }
     )
     // Seed job list entries
-    const newJobs = data.jobs.map(({ jobId, fileId }) => ({
+    const newJobs = data.jobs.map(({ jobId, fileId, source }) => ({
       jobId,
       fileId,
+      source,
       status: 'queued',
       progress: 0,
       error: null,

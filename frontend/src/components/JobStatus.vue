@@ -29,13 +29,53 @@
         </tr>
       </tbody>
     </table>
+
+    <div v-if="completedJobs.length > 0" class="completed-uploads">
+      <div v-if="photosCleanupRequired" class="cleanup-note">
+        Remove the original Google Photos videos manually to recover storage space.
+      </div>
+
+      <h3>Optimised Uploads</h3>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Original file</th>
+            <th>Optimised file</th>
+            <th>Original size</th>
+            <th>New size</th>
+            <th>Capture time</th>
+            <th>Uploaded to</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="job in completedJobs" :key="`${job.jobId}-result`">
+            <td>{{ job.originalFileName || job.fileName || job.fileId }}</td>
+            <td>{{ job.newFileName || '—' }}</td>
+            <td>{{ formatSize(job.originalSize) }}</td>
+            <td>{{ formatSize(job.newSize) }}</td>
+            <td>{{ formatDateTime(job.captureTimestamp) }}</td>
+            <td>{{ destinationLabel(job.uploadedTo) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   jobs: { type: Array, default: () => [] },
 })
+
+const completedJobs = computed(() =>
+  props.jobs.filter((job) => job.status === 'complete' && (job.newFileName || job.newFileId))
+)
+
+const photosCleanupRequired = computed(() =>
+  completedJobs.value.some((job) => job.manualCleanupRequired)
+)
 
 const STATUS_LABELS = {
   queued: 'Queued',
@@ -53,11 +93,40 @@ function statusLabel(status) {
 }
 
 function statusDetail(job) {
-  if (job.status === 'complete') return `✓ Saved as "${job.newFileName}"`
-  if (job.status === 'downloading') return 'Downloading from Drive…'
-  if (job.status === 'uploading') return 'Uploading to Drive…'
-  if (job.status === 'deleting_original') return 'Removing original…'
+  if (job.status === 'complete') {
+    return job.manualCleanupRequired
+      ? `✓ Uploaded "${job.newFileName}" to Google Photos`
+      : `✓ Saved as "${job.newFileName}"`
+  }
+  if (job.status === 'downloading') {
+    return job.source === 'photos' ? 'Downloading from Google Photos…' : 'Downloading from Drive…'
+  }
+  if (job.status === 'uploading') {
+    return job.source === 'photos' ? 'Uploading to Google Photos…' : 'Uploading to Drive…'
+  }
+  if (job.status === 'deleting_original') return 'Removing original from Drive…'
   return ''
+}
+
+function formatSize(bytes) {
+  if (bytes == null) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let val = bytes
+  let i = 0
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024
+    i++
+  }
+  return `${val.toFixed(1)} ${units[i]}`
+}
+
+function formatDateTime(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString()
+}
+
+function destinationLabel(destination) {
+  return destination === 'photos' ? 'Google Photos' : destination === 'drive' ? 'Drive' : '—'
 }
 </script>
 
@@ -70,6 +139,20 @@ function statusDetail(job) {
   margin-bottom: 0.75rem;
   font-size: 1.1rem;
   color: #2d3748;
+}
+
+.completed-uploads {
+  margin-top: 1.5rem;
+}
+
+.cleanup-note {
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fffbea;
+  border: 1px solid #f6e05e;
+  color: #744210;
+  font-size: 0.9rem;
 }
 
 .table {

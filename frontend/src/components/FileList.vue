@@ -8,10 +8,10 @@
       </label>
       <button
         class="btn btn-primary"
-        :disabled="selectedIds.length === 0 || optimising"
-        @click="$emit('optimise', selectedIds)"
+        :disabled="selectedItems.length === 0 || optimising"
+        @click="$emit('optimise', selectedItems)"
       >
-        Optimise selected ({{ selectedIds.length }})
+        Optimise selected ({{ selectedItems.length }})
       </button>
       <button class="btn btn-secondary" @click="$emit('refresh')">
         Refresh
@@ -30,6 +30,7 @@
           <th>Name</th>
           <th>Size</th>
           <th>Uploaded</th>
+          <th>Source</th>
           <th>Type</th>
         </tr>
       </thead>
@@ -65,6 +66,7 @@
           </td>
           <td class="size-cell">{{ formatSize(file.size) }}</td>
           <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
+          <td class="source-cell">{{ sourceLabel(file.source) }}</td>
           <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
         </tr>
       </tbody>
@@ -79,7 +81,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 const props = defineProps({
   files: { type: Array, default: () => [] },
@@ -94,8 +96,22 @@ const showThumbnails = ref(false)
 const selectedIds = ref([])
 
 const videoFiles = computed(() => props.files.filter((f) => f.optimisable))
+const selectedItems = computed(() =>
+  props.files
+    .filter((file) => selectedIds.value.includes(file.id))
+    .map((file) => ({ id: file.id, source: file.source || 'drive' }))
+)
 const allSelected = computed(
   () => videoFiles.value.length > 0 && videoFiles.value.every((f) => selectedIds.value.includes(f.id))
+)
+
+watch(
+  () => props.files,
+  (files) => {
+    const availableIds = new Set(files.filter((file) => file.optimisable).map((file) => file.id))
+    selectedIds.value = selectedIds.value.filter((id) => availableIds.has(id))
+  },
+  { deep: true }
 )
 
 function toggleAll(e) {
@@ -107,13 +123,13 @@ function toggleAll(e) {
 }
 
 function checkboxTitle(file) {
-  if (file.optimisable) return 'Select for optimisation'
-  if (file.isVideo) return 'Only files stored in Drive can be optimised'
+  if (file.optimisable && file.source === 'photos') return 'Select Google Photos video for optimisation'
+  if (file.optimisable) return 'Select Drive video for optimisation'
   return 'Only video files can be optimised'
 }
 
 function formatSize(bytes) {
-  if (!bytes) return '—'
+  if (bytes == null) return '—'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let val = bytes
   let i = 0
@@ -137,6 +153,10 @@ function shortMime(mime) {
   if (!mime) return '—'
   const parts = mime.split('/')
   return parts[parts.length - 1].replace(/^vnd\.google-apps\./, '')
+}
+
+function sourceLabel(source) {
+  return source === 'photos' ? 'Google Photos' : 'Drive'
 }
 </script>
 
@@ -230,6 +250,11 @@ function shortMime(mime) {
 .type-cell {
   color: #718096;
   font-size: 0.8rem;
+}
+
+.source-cell {
+  white-space: nowrap;
+  color: #4a5568;
 }
 
 .empty {
