@@ -15,6 +15,12 @@ const PHOTOS_SEARCH_URL = 'https://photoslibrary.googleapis.com/v1/mediaItems:se
 const FILE_FIELDS =
   'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)';
 
+// API display name mapping for consistent error messages
+const API_DISPLAY_NAMES = {
+  photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Photos' },
+  drive: { shortName: 'Drive', fullName: 'Google Drive API', fileType: 'Drive' },
+};
+
 // Middleware: require authenticated session
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.tokens) {
@@ -181,12 +187,7 @@ router.get('/files', requireAuth, async (req, res) => {
     const statusCode = err.response?.status || err.status || 500;
     const errorSource = err.source || 'drive';
     
-    // Map error sources to display names
-    const apiDisplayNames = {
-      photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Photos' },
-      drive: { shortName: 'Drive', fullName: 'Google Drive API', fileType: 'Drive' },
-    };
-    const apiNames = apiDisplayNames[errorSource] || apiDisplayNames.drive;
+    const apiNames = API_DISPLAY_NAMES[errorSource] || API_DISPLAY_NAMES.drive;
     
     console.error(`${apiNames.shortName} API error:`, apiError, errorDetails);
     
