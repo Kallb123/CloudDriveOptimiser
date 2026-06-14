@@ -205,7 +205,6 @@ onUnmounted(() => {
   }
 })
 </script>
-</script>
 
 <style scoped>
 .modal-overlay {
