@@ -96,12 +96,12 @@ function mapPhotoMediaItem(mediaItem) {
 
 async function fetchPhotoCandidates(tokens, candidateCount) {
   const oAuth2Client = getAuthClient(tokens);
-  const headers = await oAuth2Client.getRequestHeaders();
   const mediaItems = [];
   let nextPageToken;
 
   try {
     while (mediaItems.length < candidateCount) {
+      const { token: accessToken } = await oAuth2Client.getAccessToken();
       const response = await axios.post(
         PHOTOS_SEARCH_URL,
         {
@@ -110,7 +110,7 @@ async function fetchPhotoCandidates(tokens, candidateCount) {
         },
         {
           headers: {
-            ...headers,
+            Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
         }
