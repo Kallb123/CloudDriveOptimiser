@@ -42,6 +42,7 @@ router.get('/files', requireAuth, async (req, res) => {
     const drivePageSize = pageToken ? pageSize : Math.min(MAX_FILES, pageSize * 4);
 
     const driveResponse = await drive.files.list({
+      corpora: 'user',
       pageSize: drivePageSize,
       pageToken,
       orderBy: 'quotaBytesUsed desc',
