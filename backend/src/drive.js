@@ -42,14 +42,11 @@ router.get('/files', requireAuth, async (req, res) => {
     const drivePageSize = pageToken ? pageSize : Math.min(MAX_FILES, pageSize * 4);
 
     const driveResponse = await drive.files.list({
-      corpora: 'allDrives',
-      includeItemsFromAllDrives: true,
       pageSize: drivePageSize,
       pageToken,
       orderBy: 'quotaBytesUsed desc',
       fields: FILE_FIELDS,
       q: 'trashed = false',
-      supportsAllDrives: true,
     });
     console.log('Drive API responses:', driveResponse.data.files.length);
 
@@ -111,7 +108,6 @@ router.get('/thumbnail/:fileId', requireAuth, async (req, res) => {
     const { data: meta } = await drive.files.get({
       fileId: req.params.fileId,
       fields: 'thumbnailLink',
-      supportsAllDrives: true,
     });
 
     if (!meta.thumbnailLink) {
