@@ -304,92 +304,92 @@ async function processJob(jobId, item, tokens) {
       try { fs.unlinkSync(p); } catch (_) { /* ignore */ }
     }
   }
+}
 
-  async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
-    const drive = getDriveClient(tokens);
+async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
+  const drive = getDriveClient(tokens);
 
-    job.status = 'fetching_metadata';
-    const { data: meta } = await drive.files.get({
-      fileId,
-      fields: 'id, name, mimeType, parents, size, quotaBytesUsed, createdTime',
-    });
+  job.status = 'fetching_metadata';
+  const { data: meta } = await drive.files.get({
+    fileId,
+    fields: 'id, name, mimeType, parents, size, quotaBytesUsed, createdTime',
+  });
 
-    job.fileName = meta.name;
-    job.originalFileName = meta.name;
-    job.captureTimestamp = meta.createdTime || null;
+  job.fileName = meta.name;
+  job.originalFileName = meta.name;
+  job.captureTimestamp = meta.createdTime || null;
 
-    if (!meta.mimeType || !meta.mimeType.startsWith('video/')) {
-      throw new Error(`File "${meta.name}" is not a video (mimeType: ${meta.mimeType})`);
-    }
-
-    job.status = 'downloading';
-    job.progress = 0;
-    await downloadFile(drive, fileId, inputPath);
-    job.originalSize = getFileSize(inputPath) || parseInt(meta.size || meta.quotaBytesUsed || '0', 10);
-
-    job.status = 'transcoding';
-    job.progress = 0;
-    await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
-      job.progress = Math.round(pct);
-    });
-    job.progress = 100;
-    job.newSize = getFileSize(outputPath);
-
-    job.status = 'uploading';
-    const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
-    const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/mp4', meta.parents);
-
-    job.status = 'deleting_original';
-    await drive.files.delete({ fileId });
-
-    job.status = 'complete';
-    job.newFileId = uploaded.id;
-    job.newFileName = uploaded.name;
-    job.uploadedTo = 'drive';
-    job.manualCleanupRequired = false;
+  if (!meta.mimeType || !meta.mimeType.startsWith('video/')) {
+    throw new Error(`File "${meta.name}" is not a video (mimeType: ${meta.mimeType})`);
   }
 
-  async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
-    job.status = 'fetching_metadata';
-    const mediaItem = await getPhotoMediaItem(tokens, fileId);
+  job.status = 'downloading';
+  job.progress = 0;
+  await downloadFile(drive, fileId, inputPath);
+  job.originalSize = getFileSize(inputPath) || parseInt(meta.size || meta.quotaBytesUsed || '0', 10);
 
-    job.fileName = mediaItem.filename || mediaItem.id;
-    job.originalFileName = mediaItem.filename || mediaItem.id;
-    job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
+  job.status = 'transcoding';
+  job.progress = 0;
+  await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
+    job.progress = Math.round(pct);
+  });
+  job.progress = 100;
+  job.newSize = getFileSize(outputPath);
 
-    if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith('video/')) {
-      throw new Error(`File "${job.fileName}" is not a video (mimeType: ${mediaItem.mimeType})`);
-    }
+  job.status = 'uploading';
+  const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
+  const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/mp4', meta.parents);
 
-    job.status = 'downloading';
-    job.progress = 0;
-    await downloadPhotoVideo(tokens, mediaItem, inputPath);
-    job.originalSize = getFileSize(inputPath);
+  job.status = 'deleting_original';
+  await drive.files.delete({ fileId });
 
-    job.status = 'transcoding';
-    job.progress = 0;
-    await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
-      job.progress = Math.round(pct);
-    });
-    job.progress = 100;
-    job.newSize = getFileSize(outputPath);
+  job.status = 'complete';
+  job.newFileId = uploaded.id;
+  job.newFileName = uploaded.name;
+  job.uploadedTo = 'drive';
+  job.manualCleanupRequired = false;
+}
 
-    job.status = 'uploading';
-    const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
-    const uploaded = await uploadPhotoVideo(
-      tokens,
-      outputPath,
-      optimisedName,
-      'video/mp4',
-      mediaItem.description || undefined
-    );
+async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
+  job.status = 'fetching_metadata';
+  const mediaItem = await getPhotoMediaItem(tokens, fileId);
 
-    job.status = 'complete';
-    job.newFileId = uploaded.id;
-    job.newFileName = uploaded.filename || optimisedName;
-    job.uploadedTo = 'photos';
-    job.manualCleanupRequired = true;
+  job.fileName = mediaItem.filename || mediaItem.id;
+  job.originalFileName = mediaItem.filename || mediaItem.id;
+  job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
+
+  if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith('video/')) {
+    throw new Error(`File "${job.fileName}" is not a video (mimeType: ${mediaItem.mimeType})`);
   }
+
+  job.status = 'downloading';
+  job.progress = 0;
+  await downloadPhotoVideo(tokens, mediaItem, inputPath);
+  job.originalSize = getFileSize(inputPath);
+
+  job.status = 'transcoding';
+  job.progress = 0;
+  await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
+    job.progress = Math.round(pct);
+  });
+  job.progress = 100;
+  job.newSize = getFileSize(outputPath);
+
+  job.status = 'uploading';
+  const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
+  const uploaded = await uploadPhotoVideo(
+    tokens,
+    outputPath,
+    optimisedName,
+    'video/mp4',
+    mediaItem.description || undefined
+  );
+
+  job.status = 'complete';
+  job.newFileId = uploaded.id;
+  job.newFileName = uploaded.filename || optimisedName;
+  job.uploadedTo = 'photos';
+  job.manualCleanupRequired = true;
 }
 
 /**
