@@ -127,7 +127,10 @@ async function fetchPhotoCandidates(tokens, candidateCount) {
     }
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
-    throw new Error(apiMessage || err.message);
+    const photoError = new Error(apiMessage || err.message);
+    photoError.source = 'photos';
+    photoError.status = err.response?.status;
+    throw photoError;
   }
 
   console.log('Photos Library API media items fetched:', mediaItems.length);
@@ -175,12 +178,15 @@ router.get('/files', requireAuth, async (req, res) => {
   } catch (err) {
     const apiError = err.response?.data?.error?.message || err.message;
     const errorDetails = err.response?.data?.error || {};
-    const statusCode = err.response?.status || 500;
-    console.error('Drive files error:', apiError, errorDetails);
+    const statusCode = err.response?.status || err.status || 500;
+    const errorSource = err.source || 'drive';
+    
+    console.error(`${errorSource.charAt(0).toUpperCase() + errorSource.slice(1)} API error:`, apiError, errorDetails);
     
     // Determine appropriate status code and message based on error type
     let responseStatus = statusCode;
-    let errorMessage = 'Failed to list Drive files';
+    let errorMessage = `Failed to list ${errorSource === 'photos' ? 'Google Photos' : 'Drive'} files`;
+    let apiName = errorSource === 'photos' ? 'Google Photos Library API' : 'Google Drive API';
     
     if (statusCode === 403) {
       // Check if the error is specifically about insufficient scopes using Google API error properties
@@ -192,9 +198,9 @@ router.get('/files', requireAuth, async (req, res) => {
       );
       
       if (isScopeError) {
-        errorMessage = 'Authentication failed: insufficient scopes. Please ensure all required scopes are configured in your Google Cloud Console OAuth consent screen (see README.md "Google Cloud Setup" section for required scopes) and re-authenticate with the application.';
+        errorMessage = `Authentication failed: ${apiName} requires additional scopes. Please ensure all required scopes are configured in your Google Cloud Console OAuth consent screen (see README.md "Google Cloud Setup" section for required scopes) and re-authenticate with the application.`;
       } else {
-        errorMessage = 'Access denied by Google Drive API.';
+        errorMessage = `Access denied by ${apiName}.`;
       }
     } else if (statusCode === 401) {
       errorMessage = 'Authentication failed: invalid or expired credentials. Please re-authenticate.';
