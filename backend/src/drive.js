@@ -183,7 +183,7 @@ router.get('/files', requireAuth, async (req, res) => {
     
     // Map error sources to display names
     const apiDisplayNames = {
-      photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Google Photos' },
+      photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Photos' },
       drive: { shortName: 'Drive', fullName: 'Google Drive API', fileType: 'Drive' },
     };
     const apiNames = apiDisplayNames[errorSource] || apiDisplayNames.drive;
