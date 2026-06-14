@@ -1,4 +1,4 @@
-<!-- FileList.vue — displays drive files sorted by size -->
+<!-- FileList.vue — displays analysed files sorted by size -->
 <template>
   <div class="file-list">
     <div class="toolbar">
@@ -19,7 +19,7 @@
     </div>
 
     <div v-if="files.length === 0" class="empty">
-      No files found. Click <strong>Analyse</strong> to load your Drive files.
+      No files found. Click <strong>Analyse</strong> to load your files.
     </div>
 
     <table v-else class="table">
@@ -44,8 +44,8 @@
               type="checkbox"
               :value="file.id"
               v-model="selectedIds"
-              :disabled="!file.isVideo"
-              :title="file.isVideo ? 'Select for optimisation' : 'Only video files can be optimised'"
+              :disabled="!file.optimisable"
+              :title="checkboxTitle(file)"
             />
           </td>
           <td v-if="showThumbnails" class="thumb-cell">
@@ -93,7 +93,7 @@ const emit = defineEmits(['optimise', 'refresh', 'load-more'])
 const showThumbnails = ref(false)
 const selectedIds = ref([])
 
-const videoFiles = computed(() => props.files.filter((f) => f.isVideo))
+const videoFiles = computed(() => props.files.filter((f) => f.optimisable))
 const allSelected = computed(
   () => videoFiles.value.length > 0 && videoFiles.value.every((f) => selectedIds.value.includes(f.id))
 )
@@ -104,6 +104,12 @@ function toggleAll(e) {
   } else {
     selectedIds.value = []
   }
+}
+
+function checkboxTitle(file) {
+  if (file.optimisable) return 'Select for optimisation'
+  if (file.isVideo) return 'Only files stored in Drive can be optimised'
+  return 'Only video files can be optimised'
 }
 
 function formatSize(bytes) {
