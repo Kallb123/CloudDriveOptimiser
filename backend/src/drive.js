@@ -181,12 +181,18 @@ router.get('/files', requireAuth, async (req, res) => {
     const statusCode = err.response?.status || err.status || 500;
     const errorSource = err.source || 'drive';
     
-    console.error(`${errorSource.charAt(0).toUpperCase() + errorSource.slice(1)} API error:`, apiError, errorDetails);
+    // Map error sources to display names
+    const apiDisplayNames = {
+      photos: { shortName: 'Photos', fullName: 'Google Photos Library API', fileType: 'Google Photos' },
+      drive: { shortName: 'Drive', fullName: 'Google Drive API', fileType: 'Drive' },
+    };
+    const apiNames = apiDisplayNames[errorSource] || apiDisplayNames.drive;
+    
+    console.error(`${apiNames.shortName} API error:`, apiError, errorDetails);
     
     // Determine appropriate status code and message based on error type
     let responseStatus = statusCode;
-    let errorMessage = `Failed to list ${errorSource === 'photos' ? 'Google Photos' : 'Drive'} files`;
-    let apiName = errorSource === 'photos' ? 'Google Photos Library API' : 'Google Drive API';
+    let errorMessage = `Failed to list ${apiNames.fileType} files`;
     
     if (statusCode === 403) {
       // Check if the error is specifically about insufficient scopes using Google API error properties
@@ -198,9 +204,9 @@ router.get('/files', requireAuth, async (req, res) => {
       );
       
       if (isScopeError) {
-        errorMessage = `Authentication failed: ${apiName} requires additional scopes. Please ensure all required scopes are configured in your Google Cloud Console OAuth consent screen (see README.md "Google Cloud Setup" section for required scopes) and re-authenticate with the application.`;
+        errorMessage = `Authentication failed: ${apiNames.fullName} requires additional scopes. Please ensure all required scopes are configured in your Google Cloud Console OAuth consent screen (see README.md "Google Cloud Setup" section for required scopes) and re-authenticate with the application.`;
       } else {
-        errorMessage = `Access denied by ${apiName}.`;
+        errorMessage = `Access denied by ${apiNames.fullName}.`;
       }
     } else if (statusCode === 401) {
       errorMessage = 'Authentication failed: invalid or expired credentials. Please re-authenticate.';
