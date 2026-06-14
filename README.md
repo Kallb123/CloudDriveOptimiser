@@ -9,8 +9,9 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 - **Google OAuth 2.0** — sign in securely with your Google account
 - **Drive + Photos analysis** — lists your largest Drive and Photos items sorted by size, with file name, upload date, and size
 - **Thumbnails** — optional thumbnail view for images and videos
-- **Video optimisation** — select one or more video files and re-encode them at 720 p (configurable) using FFmpeg; the original is deleted once the new file is successfully uploaded
+- **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720 p (configurable) using FFmpeg
 - **Job tracking** — real-time progress display for each transcoding job
+- **Upload summary** — completed optimisations list the original file size, new file size, capture timestamp, and filenames
 - **Pagination** — load more files on demand
 
 ---
@@ -29,6 +30,8 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 │  • Google OAuth flow                 │
 │  • Drive API (list / download /      │
 │    upload / delete)                  │
+│  • Photos Library API (list /        │
+│    download / upload)                │
 │  • FFmpeg transcoding jobs           │
 └──────────────────────────────────────┘
 ```
@@ -61,6 +64,7 @@ Both services are orchestrated with Docker Compose.
 Inside your project navigate to **APIs & Services → Library** and enable:
 
 - **Google Drive API**
+- **Google Photos Library API**
 - **Google People API** (for profile information)
 
 ### 3 — Configure the OAuth consent screen
@@ -73,7 +77,8 @@ Inside your project navigate to **APIs & Services → Library** and enable:
    - **Developer contact email**: your email
 4. On the **Scopes** step add:
    - `https://www.googleapis.com/auth/drive`
-   - `https://www.googleapis.com/auth/drive.photos.readonly`
+   - `https://www.googleapis.com/auth/photoslibrary.appendonly`
+   - `https://www.googleapis.com/auth/photoslibrary.readonly`
    - `https://www.googleapis.com/auth/userinfo.profile`
    - `https://www.googleapis.com/auth/userinfo.email`
 5. Add your own Google account as a **Test user** (required while the app is in testing mode).
@@ -175,17 +180,19 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 ## Usage
 
 1. Open the application in your browser.
-2. Click **Sign in with Google** and grant the requested Drive permissions.
-3. Click **Analyse Drive** to fetch your largest files.
+2. Click **Sign in with Google** and grant the requested Drive and Google Photos permissions.
+3. Click **Analyse library** to fetch your largest Drive files and Google Photos media items.
 4. Toggle **Show thumbnails** to preview images and videos inline.
-5. Check the boxes next to one or more **video** files (only video files are eligible for optimisation).
+5. Check the boxes next to one or more **video** files from Drive or Google Photos.
 6. Click **Optimise selected** to begin the transcoding pipeline:
-   - The video is downloaded from Drive.
+   - The video is downloaded from Drive or Google Photos.
    - FFmpeg re-encodes it at the configured resolution and quality.
-   - The optimised file is uploaded back to the same folder in Drive.
-   - The original file is deleted.
+   - Embedded metadata is copied onto the optimised MP4.
+   - Drive videos are uploaded back to the same folder in Drive and the original is deleted automatically.
+   - Google Photos videos are uploaded back into Google Photos as new items.
 7. The **Optimisation Jobs** panel shows real-time progress for each file.
-8. Once all jobs complete the file list refreshes automatically.
+8. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
+9. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
 
 ---
 
@@ -197,8 +204,8 @@ CloudDriveOptimiser/
 │   ├── src/
 │   │   ├── index.js       # Express app entry point
 │   │   ├── auth.js        # Google OAuth routes
-│   │   ├── drive.js       # Drive file listing & thumbnail proxy
-│   │   └── optimise.js    # Video transcoding pipeline & job tracking
+│   │   ├── drive.js       # Drive + Photos listing & thumbnail proxy
+│   │   └── optimise.js    # Video transcoding pipelines & job tracking
 │   ├── Dockerfile
 │   └── package.json
 ├── frontend/
@@ -235,7 +242,7 @@ CloudDriveOptimiser/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | "Authentication failed" after Google login | Redirect URI mismatch | Ensure `BACKEND_URL/auth/google/callback` is listed in Google Console |
-| Files list is empty | Drive API not enabled | Enable the Drive API in Google Cloud Console |
+| Files list is empty | Required Google APIs not enabled | Enable the Drive API and Google Photos Library API in Google Cloud Console |
 | Optimisation fails: "not a video" | File MIME type is not `video/*` | Only video files can be optimised |
 | FFmpeg not found | Missing in container | Rebuild with `docker compose build --no-cache` |
 | Session lost on backend restart | No persistent session store | For production, configure a Redis session store |

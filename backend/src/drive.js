@@ -90,7 +90,7 @@ function mapPhotoMediaItem(mediaItem) {
     webViewLink: mediaItem.productUrl || null,
     isVideo,
     source: 'photos',
-    optimisable: false,
+    optimisable: isVideo,
   };
 }
 
