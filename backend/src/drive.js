@@ -43,6 +43,7 @@ router.get('/files', requireAuth, async (req, res) => {
 
     const driveResponse = await drive.files.list({
       corpora: 'user',
+      includeItemsFromAllDrives: false,
       pageSize: drivePageSize,
       pageToken,
       orderBy: 'quotaBytesUsed desc',
