@@ -40,13 +40,21 @@
       <div v-else class="dashboard">
         <div class="dashboard-header">
           <h2>Your Drive + Photos — Largest Media</h2>
-          <button
-            class="btn btn-primary"
-            :disabled="loading"
-            @click="analyseFiles"
-          >
-            {{ loading ? 'Analysing…' : analysed ? 'Re-analyse' : 'Analyse library' }}
-          </button>
+          <div class="header-buttons">
+            <button
+              class="btn btn-primary"
+              :disabled="loading"
+              @click="analyseFiles"
+            >
+              {{ loading ? 'Analysing…' : analysed ? 'Re-analyse' : 'Analyse library' }}
+            </button>
+            <button
+              class="btn btn-primary"
+              @click="openPhotoPicker"
+            >
+              Select Photos Videos
+            </button>
+          </div>
         </div>
 
         <div v-if="error" class="alert alert-error">{{ error }}</div>
@@ -64,6 +72,12 @@
 
         <JobStatus :jobs="jobList" />
       </div>
+
+      <!-- Photo Picker Modal -->
+      <PhotoPickerModal
+        v-model="pickerModalOpen"
+        @items-selected="handlePhotosSelected"
+      />
     </main>
 
     <!-- Footer -->
@@ -76,6 +90,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
+import PhotoPickerModal from './components/PhotoPickerModal.vue'
 
 
 const appVersion = __APP_VERSION__;
@@ -90,6 +105,7 @@ const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
 const authError = ref(false)
+const pickerModalOpen = ref(false)
 
 let pollInterval = null
 
@@ -150,6 +166,18 @@ async function loadMore() {
   } finally {
     loading.value = false
   }
+}
+
+// ---- Photo Picker ----
+
+function openPhotoPicker() {
+  pickerModalOpen.value = true
+}
+
+function handlePhotosSelected(photoFiles) {
+  // Add selected photo files to the file list
+  files.value = [...files.value, ...photoFiles].sort((a, b) => b.size - a.size)
+  console.log('Added', photoFiles.length, 'photos from picker to file list')
 }
 
 // ---- Optimisation ----
@@ -360,6 +388,13 @@ body {
 .dashboard-header h2 {
   font-size: 1.25rem;
   color: #2d3748;
+  margin: 0;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 /* Alerts */
