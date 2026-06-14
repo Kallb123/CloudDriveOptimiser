@@ -103,7 +103,12 @@ async function openPicker() {
     const { data } = await axios.post(
       '/api/drive/picker/create-session',
       {},
-      { withCredentials: true }
+      {
+        withCredentials: true,
+        headers: {
+          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
+        },
+      }
     )
 
     pickerUri.value = data.pickerUri
@@ -155,7 +160,12 @@ async function confirmSelection() {
     const { data } = await axios.post(
       '/api/drive/picker/get-items',
       { sessionId: sessionId.value },
-      { withCredentials: true }
+      {
+        withCredentials: true,
+        headers: {
+          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
+        },
+      }
     )
 
     const files = data.files || []
