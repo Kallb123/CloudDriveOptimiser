@@ -52,7 +52,7 @@
               class="btn btn-primary"
               @click="openPhotoPicker"
             >
-              Select Photos Videos
+              Select Videos
             </button>
           </div>
         </div>

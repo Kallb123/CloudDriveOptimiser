@@ -197,7 +197,7 @@ router.get('/thumbnail/:fileId', requireAuth, async (req, res) => {
 /**
  * POST /api/drive/picker/create-session
  * Creates a Google Photos Picker session and returns the pickerUri and sessionId.
- * The frontend will open the pickerUri in an iframe and listen for completion.
+ * The frontend opens pickerUri in a secure popup and polls the session status.
  */
 router.post('/picker/create-session', requireAuth, async (req, res) => {
   try {
@@ -207,10 +207,7 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
     // Call Google's photoPicker API to create a picker session
     const response = await axios.post(
       'https://photospicker.googleapis.com/v1/sessions',
-      {
-        features: ['MULTI_SELECT'],
-        displayMode: 'PICKER',
-      },
+      {},
       {
         headers: {
           Authorization: 'Bearer ' + accessToken,
@@ -219,7 +216,7 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
       }
     );
 
-    const { pickerUri, sessionId } = response.data;
+    const { pickerUri, id: sessionId } = response.data;
 
     if (!pickerUri || !sessionId) {
       return res.status(500).json({
@@ -238,10 +235,61 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
   }
 });
 
+async function fetchPickerResult(sessionId, accessToken) {
+  const response = await axios.post(
+    'https://photospicker.googleapis.com/v1/sessions/' +
+      encodeURIComponent(sessionId) +
+      ':getResult',
+    {},
+    {
+      headers: {
+        Authorization: 'Bearer ' + accessToken,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data;
+}
+
+/**
+ * POST /api/drive/picker/status
+ * Polls the Google Photos Picker session status. If the user has not completed selection,
+ * it returns done: false. Once mediaItemsSet is true, it returns the selected items.
+ */
+router.post('/picker/status', requireAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId in request body' });
+    }
+
+    const oAuth2Client = getAuthClient(req.session.tokens);
+    const { token: accessToken } = await oAuth2Client.getAccessToken();
+    const resultData = await fetchPickerResult(sessionId, accessToken);
+
+    const mediaItemsSet = resultData.mediaItemsSet === true;
+    const mediaItems = Array.isArray(resultData.mediaItems) ? resultData.mediaItems : [];
+
+    if (!mediaItemsSet) {
+      return res.json({ done: false, mediaItemsSet: false, selectedCount: mediaItems.length });
+    }
+
+    const mappedItems = mediaItems.map(mapPhotoMediaItem);
+    return res.json({ done: true, mediaItemsSet: true, selectedCount: mappedItems.length, files: mappedItems });
+  } catch (err) {
+    const apiMessage = err.response?.data?.error?.message;
+    console.error('Photos Picker status error:', apiMessage || err.message);
+    return res.status(err.response?.status || 500).json({
+      error: apiMessage || 'Failed to fetch Google Photos Picker status',
+    });
+  }
+});
+
 /**
  * POST /api/drive/picker/get-items
  * Retrieves the selected media items from the picker session.
- * The frontend calls this after the user completes the picker flow.
+ * This endpoint remains available for direct retrieval if needed.
  */
 router.post('/picker/get-items', requireAuth, async (req, res) => {
   try {
