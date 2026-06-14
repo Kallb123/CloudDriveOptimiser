@@ -40,7 +40,7 @@ function parseDurationSeconds(duration) {
   if (typeof duration !== 'string') return 0;
   const normalizedDuration = duration.endsWith('s') ? duration.slice(0, -1) : duration;
   const seconds = Number.parseFloat(normalizedDuration);
-  return Number.isFinite(seconds) ? seconds : 0;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
 function estimatePhotoSize(mediaItem) {
@@ -100,29 +100,34 @@ async function fetchPhotoCandidates(tokens, candidateCount) {
   const mediaItems = [];
   let nextPageToken;
 
-  while (mediaItems.length < candidateCount) {
-    const response = await axios.post(
-      PHOTOS_SEARCH_URL,
-      {
-        pageSize: Math.min(PHOTOS_PAGE_SIZE, candidateCount - mediaItems.length),
-        ...(nextPageToken ? { pageToken: nextPageToken } : {}),
-      },
-      {
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
+  try {
+    while (mediaItems.length < candidateCount) {
+      const response = await axios.post(
+        PHOTOS_SEARCH_URL,
+        {
+          pageSize: Math.min(PHOTOS_PAGE_SIZE, candidateCount - mediaItems.length),
+          ...(nextPageToken ? { pageToken: nextPageToken } : {}),
         },
+        {
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const items = response.data.mediaItems || [];
+      mediaItems.push(...items);
+
+      if (!response.data.nextPageToken || items.length === 0) {
+        break;
       }
-    );
 
-    const items = response.data.mediaItems || [];
-    mediaItems.push(...items);
-
-    if (!response.data.nextPageToken || items.length === 0) {
-      break;
+      nextPageToken = response.data.nextPageToken;
     }
-
-    nextPageToken = response.data.nextPageToken;
+  } catch (err) {
+    const apiMessage = err.response?.data?.error?.message;
+    throw new Error(apiMessage || err.message);
   }
 
   console.log('Photos Library API media items fetched:', mediaItems.length);
