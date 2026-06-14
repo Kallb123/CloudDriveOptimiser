@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 
 const props = defineProps({
@@ -80,16 +80,17 @@ const pickerCompleted = ref(false)
 const selectedCount = ref(0)
 
 // Watch for external changes to the modal value
-const unwatch = () => {}
-onMounted(() => {
-  const watcher = () => {
-    isOpen.value = props.modelValue
+let messageHandler = null
+
+watch(
+  () => props.modelValue,
+  (newValue) => {
+    isOpen.value = newValue
     if (isOpen.value) {
       openPicker()
     }
   }
-  watcher()
-})
+)
 
 async function openPicker() {
   try {
@@ -123,19 +124,26 @@ async function openPicker() {
 }
 
 function setupPostMessageListener() {
-  function handleMessage(event) {
-    // Verify the message origin in production
-    // event.origin check would be needed with actual Google domain
+  messageHandler = (event) => {
+    // Verify message origin comes from Google
+    if (!event.origin.includes('google.com')) {
+      console.warn('Received message from untrusted origin:', event.origin)
+      return
+    }
 
     if (event.data?.type === 'SELECTION_COMPLETE') {
       console.log('Picker selection completed')
       pickerCompleted.value = true
       selectedCount.value = event.data?.count || 0
-      window.removeEventListener('message', handleMessage)
+      // Remove listener after completion
+      if (messageHandler) {
+        window.removeEventListener('message', messageHandler)
+        messageHandler = null
+      }
     }
   }
 
-  window.addEventListener('message', handleMessage)
+  window.addEventListener('message', messageHandler)
 }
 
 async function confirmSelection() {
@@ -181,12 +189,22 @@ function closeModal() {
   sessionId.value = null
   pickerCompleted.value = false
   error.value = null
+  // Clean up message listener
+  if (messageHandler) {
+    window.removeEventListener('message', messageHandler)
+    messageHandler = null
+  }
   emit('update:modelValue', false)
 }
 
 onUnmounted(() => {
-  if (unwatch) unwatch()
+  // Ensure listener is removed when component is unmounted
+  if (messageHandler) {
+    window.removeEventListener('message', messageHandler)
+    messageHandler = null
+  }
 })
+</script>
 </script>
 
 <style scoped>
