@@ -70,7 +70,7 @@
           @load-more="loadMore"
         />
 
-        <JobStatus :jobs="jobList" />
+        <JobStatus ref="jobStatusAnchor" :jobs="jobList" />
       </div>
 
       <!-- Photo Picker Modal -->
@@ -87,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
@@ -108,6 +108,7 @@ const jobList = ref([])
 const authError = ref(false)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
+const jobStatusAnchor = ref(null)
 
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
 
@@ -247,6 +248,11 @@ async function startOptimise(items) {
     }))
     jobList.value = [...jobList.value, ...newJobs]
     startPolling()
+
+    await nextTick()
+    if (jobStatusAnchor.value) {
+      jobStatusAnchor.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
   } catch (err) {
     error.value = err.response?.data?.error || 'Failed to start optimisation'
     optimising.value = false
