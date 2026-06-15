@@ -11,10 +11,9 @@ const { exiftool } = require('exiftool-vendored');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { getDriveClient, requireAuth } = require('./drive');
 const { createOAuthClient } = require('./auth');
+const jobStore = require('./job-store');
 
 const router = express.Router();
-
-// In-memory job store (keyed by jobId)
 const jobs = {};
 
 const TARGET_HEIGHT = parseInt(process.env.TRANSCODE_HEIGHT || '720', 10);
@@ -336,15 +335,26 @@ router.post('/start', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'each item must include an id or mediaItem; source, when provided, must be drive or photos' });
   }
 
-  const queuedJobs = items.map((item) => {
+  const queuedJobs = [];
+  for (const item of items) {
     const jobId = uuidv4();
     const fileId = item.id || item.mediaItem?.id;
     const source = item.source || 'drive';
-    jobs[jobId] = { jobId, fileId, source, status: 'queued', progress: 0, error: null };
-    return { jobId, fileId, source, item };
-  });
+    const job = {
+      jobId,
+      sessionId: req.sessionID,
+      fileId,
+      source,
+      status: 'queued',
+      progress: 0,
+      error: null,
+    };
 
-  // Snapshot session tokens once so the async workers have a copy
+    jobs[jobId] = job;
+    await jobStore.saveJobWithSession(job);
+    queuedJobs.push({ jobId, fileId, source, item });
+  }
+
   const tokens = req.session.tokens;
 
   // Process jobs asynchronously
@@ -362,12 +372,15 @@ router.post('/start', requireAuth, async (req, res) => {
  * GET /api/optimise/status/:jobId
  * Returns the current status of an optimisation job.
  */
-router.get('/status/:jobId', requireAuth, (req, res) => {
+router.get('/status/:jobId', requireAuth, async (req, res) => {
   console.log(`${LOG_PREFIX} status requested for job`, {
     sessionId: req.sessionID,
     jobId: req.params.jobId,
   });
-  const job = jobs[req.params.jobId];
+  let job = jobs[req.params.jobId];
+  if (!job) {
+    job = await jobStore.loadJob(req.params.jobId);
+  }
   if (!job) {
     console.warn(`${LOG_PREFIX} status request failed - job not found`, {
       sessionId: req.sessionID,
@@ -380,14 +393,14 @@ router.get('/status/:jobId', requireAuth, (req, res) => {
 
 /**
  * GET /api/optimise/status
- * Returns the current status of all jobs in this server process.
+ * Returns the current status of all jobs for the authenticated session.
  */
-router.get('/status', requireAuth, (req, res) => {
-  console.log(`${LOG_PREFIX} status requested for all jobs`, {
+router.get('/status', requireAuth, async (req, res) => {
+  console.log(`${LOG_PREFIX} status requested for session jobs`, {
     sessionId: req.sessionID,
-    jobCount: Object.keys(jobs).length,
   });
-  return res.json({ jobs: Object.values(jobs) });
+  const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
+  return res.json({ jobs: sessionJobs });
 });
 
 /**
@@ -411,9 +424,13 @@ async function processJob(jobId, item, tokens) {
   } catch (err) {
     job.status = 'error';
     job.error = err.message;
+    await jobStore.saveJob(job);
     console.error(`${LOG_PREFIX} job error`, { jobId, error: err.message });
     throw err;
   } finally {
+    await jobStore.saveJob(job).catch((err) => {
+      console.error(`${LOG_PREFIX} failed to persist job state`, { jobId, error: err.message });
+    });
     // Clean up temp files
     for (const p of [inputPath, outputPath]) {
       try { fs.unlinkSync(p); } catch (cleanupErr) {
@@ -427,6 +444,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   const drive = getDriveClient(tokens);
 
   job.status = 'fetching_metadata';
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} fetching Drive metadata`, { jobId: job.jobId, fileId });
   const { data: meta } = await drive.files.get({
     fileId,
@@ -444,8 +462,10 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
 
   job.status = 'downloading';
   job.progress = 0;
+  await jobStore.saveJob(job);
   await downloadFile(drive, fileId, inputPath);
   job.originalSize = getFileSize(inputPath) || parseInt(meta.size || meta.quotaBytesUsed || '0', 10);
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} Drive file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
   job.status = 'transcoding';
@@ -458,10 +478,12 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     driveOrientationIsPortrait,
     (pct) => {
       job.progress = Math.round(pct);
+      jobStore.saveJob(job);
     }
   );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} transcoding complete`, {
     jobId: job.jobId,
     newSize: job.newSize,
@@ -490,6 +512,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   const photoId = item.id || mediaItemInput?.id;
   const mediaFile = mediaItemInput?.mediaFile || mediaItemInput;
   job.status = 'fetching_metadata';
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} fetching Photos metadata`, { jobId: job.jobId, photoId });
 
   const mediaItem = mediaFile || (photoId ? await getPhotoMediaItem(tokens, photoId) : null);
@@ -502,6 +525,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
   job.fileId = mediaItem.id;
   job.mediaItem = mediaItem;
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} Photos metadata fetched`, {
     jobId: job.jobId,
     photoId,
@@ -515,12 +539,15 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
 
   job.status = 'downloading';
   job.progress = 0;
+  await jobStore.saveJob(job);
   await downloadPhotoVideo(tokens, mediaItem, inputPath);
   job.originalSize = getFileSize(inputPath);
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} Photos file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
   job.status = 'transcoding';
   job.progress = 0;
+  await jobStore.saveJob(job);
   const photosMetadata = mediaFile.mediaMetadata || mediaItem.mediaMetadata || {};
   const photosOrientationIsPortrait = isPortraitFromVideoMetadata(photosMetadata);
   await transcodeVideo(
@@ -530,10 +557,12 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     photosOrientationIsPortrait,
     (pct) => {
       job.progress = Math.round(pct);
+      jobStore.saveJob(job).catch(() => {})
     }
   );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} transcoding complete`, {
     jobId: job.jobId,
     newSize: job.newSize,
@@ -541,6 +570,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   });
 
   job.status = 'uploading';
+  await jobStore.saveJob(job);
   const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
   const uploaded = await uploadPhotoVideo(
     tokens,
@@ -549,6 +579,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     'video/mp4',
     mediaItem.description || undefined
   );
+  await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
 
   job.status = 'complete';
@@ -556,6 +587,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   job.newFileName = uploaded.filename || optimisedName;
   job.uploadedTo = 'photos';
   job.manualCleanupRequired = true;
+  await jobStore.saveJob(job);
 }
 
 /**

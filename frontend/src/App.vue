@@ -109,8 +109,46 @@ const authError = ref(false)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 
+const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
+
 let pollTimer = null
 let pollingActive = false
+
+function getPhotoStorageKey() {
+  return user.value?.id
+    ? `${PHOTO_PICKER_STORAGE_KEY_PREFIX}:${user.value.id}`
+    : PHOTO_PICKER_STORAGE_KEY_PREFIX
+}
+
+function loadPersistedPhotoFiles() {
+  if (!user.value?.id) return []
+  try {
+    const raw = localStorage.getItem(getPhotoStorageKey())
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+  } catch {
+    return []
+  }
+}
+
+function savePersistedPhotoFiles() {
+  if (!user.value?.id) return
+  const photoFiles = files.value.filter((file) => file.source === 'photos')
+  localStorage.setItem(getPhotoStorageKey(), JSON.stringify(photoFiles))
+}
+
+function mergeFiles(driveFiles, photoFiles) {
+  const fileMap = new Map()
+  ;[...photoFiles, ...driveFiles].forEach((file) => {
+    const key = `${file.source}:${file.id}`
+    if (!fileMap.has(key)) {
+      fileMap.set(key, file)
+    }
+  })
+  return Array.from(fileMap.values()).sort((a, b) => (b.size || 0) - (a.size || 0))
+}
 
 // ---- Auth ----
 
@@ -127,6 +165,7 @@ async function checkAuth() {
 
 async function logout() {
   await axios.post('/auth/logout', {}, { withCredentials: true })
+  localStorage.removeItem(getPhotoStorageKey())
   authenticated.value = false
   user.value = null
   files.value = []
@@ -140,12 +179,12 @@ async function logout() {
 async function analyseFiles() {
   error.value = null
   loading.value = true
-  files.value = []
   nextPageToken.value = null
   analysed.value = true
   try {
     const { data } = await axios.get('/api/drive/files', { withCredentials: true })
-    files.value = data.files
+    const persistedPhotos = loadPersistedPhotoFiles()
+    files.value = mergeFiles(data.files, persistedPhotos)
     nextPageToken.value = data.nextPageToken
   } catch (err) {
     error.value = err.response?.data?.error || 'Failed to fetch files'
@@ -162,7 +201,7 @@ async function loadMore() {
       params: { pageToken: nextPageToken.value },
       withCredentials: true,
     })
-    files.value = [...files.value, ...data.files]
+    files.value = mergeFiles([...files.value, ...data.files], loadPersistedPhotoFiles())
     nextPageToken.value = data.nextPageToken
   } catch (err) {
     error.value = err.response?.data?.error || 'Failed to load more files'
@@ -179,8 +218,9 @@ function openPhotoPicker() {
 }
 
 function handlePhotosSelected(photoFiles) {
-  // Add selected photo files to the file list
-  files.value = [...files.value, ...photoFiles].sort((a, b) => b.size - a.size)
+  // Add selected photo files to the file list and persist them
+  files.value = mergeFiles([...files.value, ...photoFiles], [])
+  savePersistedPhotoFiles()
   console.log('Added', photoFiles.length, 'photos from picker to file list')
 }
 
@@ -217,15 +257,17 @@ async function pollJobs() {
   if (!pollingActive || jobList.value.length === 0) return
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
-    jobList.value = data.jobs
+    jobList.value = data.jobs || []
+    optimising.value = jobList.value.some(
+      (j) => j.status !== 'complete' && j.status !== 'error'
+    )
 
-    const allDone = data.jobs.every(
+    const allDone = jobList.value.every(
       (j) => j.status === 'complete' || j.status === 'error'
     )
     if (allDone) {
       stopPolling()
       optimising.value = false
-      // Refresh file list after optimisation
       if (analysed.value) await analyseFiles()
       return
     }
@@ -257,6 +299,21 @@ function stopPolling() {
 
 // ---- Lifecycle ----
 
+async function hydrateJobs() {
+  try {
+    const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
+    jobList.value = data.jobs || []
+    optimising.value = jobList.value.some(
+      (j) => j.status !== 'complete' && j.status !== 'error'
+    )
+    if (optimising.value) {
+      startPolling()
+    }
+  } catch (err) {
+    console.warn('Failed to hydrate optimisation jobs', err?.message || err)
+  }
+}
+
 onMounted(async () => {
   // Check for auth error param in URL
   if (window.location.search.includes('error=auth_failed')) {
@@ -265,6 +322,11 @@ onMounted(async () => {
   }
   await checkAuth()
   if (authenticated.value) {
+    const persistedPhotos = loadPersistedPhotoFiles()
+    if (persistedPhotos.length > 0) {
+      files.value = mergeFiles([], persistedPhotos)
+    }
+    await hydrateJobs()
     await analyseFiles()
   }
 })

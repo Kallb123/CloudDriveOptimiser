@@ -3,7 +3,7 @@
 const express = require('express');
 const session = require('express-session');
 const { RedisStore } = require('connect-redis');
-const { createClient } = require('redis');
+const redisClient = require('./redis-client');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -25,15 +25,6 @@ const { version: VERSION } = require("../package.json");
 
 // Trust one proxy hop so Vite dev server or a reverse proxy can preserve session cookies and secure proxy headers.
 app.set('trust proxy', 1);
-
-const redisClient = createClient({ url: REDIS_URL });
-redisClient.on('error', (err) => {
-  console.error('Redis client error:', err);
-});
-redisClient.connect()
-  .then(() => console.log(`Connected to Redis at ${REDIS_URL}`))
-  .catch((err) => console.error('Redis connection failed:', err));
-
 
 console.log(`[cloud-drive-optimiser] v${VERSION} starting`);
 
