@@ -52,6 +52,20 @@ async function downloadFile(drive, fileId, destPath) {
   });
 }
 
+function getOriginalCreationTime(inputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) return reject(err);
+      
+      // Look for creation_time in format tags or stream tags
+      const creationTime = metadata.format.tags?.creation_time 
+                        || metadata.streams[0]?.tags?.creation_time;
+                        
+      resolve(creationTime || null); 
+    });
+  });
+}
+
 /**
  * Re-encode the video using ffmpeg.
  * Scales to TARGET_HEIGHT while preserving aspect ratio,
@@ -59,6 +73,7 @@ async function downloadFile(drive, fileId, destPath) {
  */
 function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
   const scaleArg = shouldUseWidth ? `${TARGET_HEIGHT}:-2` : `-2:${TARGET_HEIGHT}`;
+  const originalDate = await getOriginalCreationTime(inputPath);
   const outputOptions = [
     '-map_metadata 0',
     `-vf scale=${scaleArg}`,
@@ -67,17 +82,24 @@ function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgr
     `-preset ${VIDEO_PRESET}`,
     '-c:a aac',
     '-b:a 128k',
-    '-movflags +faststart',
+    // Force the output container to recognize custom metadata tags
+    '-movflags use_metadata_tags'
   ];
 
-  if (metadata?.captureTimestamp) {
-    outputOptions.push(`-metadata creation_time=${metadata.captureTimestamp}`);
-  }
-
   return new Promise((resolve, reject) => {
+    const command =
     ffmpeg(inputPath)
       .outputOptions(outputOptions)
-      .output(outputPath)
+      .output(outputPath);
+
+    // If an original creation time was found, inject it explicitly
+    if (originalDate) {
+      command.outputOptions(`-metadata creation_time=${originalDate}`);
+    } else if (metadata.captureTimestamp) {
+      command.outputOptions(`-metadata creation_time=${metadata.captureTimestamp}`);
+    }
+  
+    command
       .on('progress', (progress) => {
         if (typeof onProgress === 'function') {
           onProgress(progress.percent || 0);
