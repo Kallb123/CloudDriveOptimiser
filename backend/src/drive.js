@@ -205,6 +205,7 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
     const { token: accessToken } = await oAuth2Client.getAccessToken();
 
     // Call Google's photoPicker API to create a picker session
+    console.log('Creating Photos Picker session', { accessTokenAvailable: Boolean(accessToken) });
     const response = await axios.post(
       'https://photospicker.googleapis.com/v1/sessions',
       {},
@@ -216,10 +217,16 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
       }
     );
 
+    console.log('Photos Picker create-session response', {
+      status: response.status,
+      data: response.data,
+    });
+
     const rawSessionId = response.data.sessionId || response.data.id || null;
     const sessionId = rawSessionId || (typeof response.data.name === 'string'
       ? response.data.name.split('/').pop()
       : null);
+    const pickerUri = response.data.pickerUri || null;
 
     if (!pickerUri || !sessionId) {
       console.error('Photos Picker session creation response missing fields:', response.data);
@@ -239,28 +246,47 @@ router.post('/picker/create-session', requireAuth, async (req, res) => {
   }
 });
 
+function normalizePickerSessionResource(sessionId) {
+  if (!sessionId) return null;
+  return sessionId.includes('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
+}
+
 async function fetchPickerResult(sessionId, accessToken) {
   try {
-    const response = await axios.post(
+    const sessionResource = normalizePickerSessionResource(sessionId);
+    console.log('Fetching Photos Picker result', {
+      sessionId,
+      sessionResource,
+      accessTokenAvailable: Boolean(accessToken),
+    });
+
+    const response = await axios.get(
       'https://photospicker.googleapis.com/v1/sessions/' +
-        encodeURIComponent(sessionId) +
-        ':getResult',
-      {},
+        encodeURIComponent(sessionResource),
       {
         headers: {
           Authorization: 'Bearer ' + accessToken,
-          'Content-Type': 'application/json',
         },
       }
     );
+
+    console.log('Photos Picker getResult response', {
+      sessionResource,
+      status: response.status,
+      data: response.data,
+    });
     return response.data;
   } catch (err) {
     const status = err.response?.status;
     const apiMessage = err.response?.data?.error?.message || err.message;
-    console.error(
-      `Google Photos Picker getResult error (session=${sessionId}, status=${status}):`,
-      apiMessage
-    );
+    console.error('Google Photos Picker getResult error', {
+      sessionId,
+      sessionResource: normalizePickerSessionResource(sessionId),
+      status,
+      apiMessage,
+      responseData: err.response?.data,
+      responseHeaders: err.response?.headers,
+    });
     throw err;
   }
 }
@@ -273,14 +299,24 @@ async function fetchPickerResult(sessionId, accessToken) {
 router.post('/picker/status', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
+    console.log('Picker status request body', { body: req.body });
 
     if (!sessionId) {
+      console.error('Picker status missing sessionId in request body');
       return res.status(400).json({ error: 'Missing sessionId in request body' });
     }
 
     const oAuth2Client = getAuthClient(req.session.tokens);
     const { token: accessToken } = await oAuth2Client.getAccessToken();
     const resultData = await fetchPickerResult(sessionId, accessToken);
+
+    console.log('Picker status result data', {
+      sessionId,
+      mediaItemsSet: resultData.mediaItemsSet,
+      mediaItemsLength: Array.isArray(resultData.mediaItems) ? resultData.mediaItems.length : 'not-array',
+      resultDataKeys: Object.keys(resultData || {}),
+      rawData: resultData,
+    });
 
     const mediaItemsSet = resultData.mediaItemsSet === true;
     const mediaItems = Array.isArray(resultData.mediaItems) ? resultData.mediaItems : [];
@@ -293,7 +329,12 @@ router.post('/picker/status', requireAuth, async (req, res) => {
     return res.json({ done: true, mediaItemsSet: true, selectedCount: mappedItems.length, files: mappedItems });
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
-    console.error('Photos Picker status error:', apiMessage || err.message);
+    console.error('Photos Picker status error:', {
+      sessionId: req.body?.sessionId,
+      message: apiMessage || err.message,
+      responseData: err.response?.data,
+      responseHeaders: err.response?.headers,
+    });
     return res.status(err.response?.status || 500).json({
       error: apiMessage || 'Failed to fetch Google Photos Picker status',
     });
@@ -308,36 +349,55 @@ router.post('/picker/status', requireAuth, async (req, res) => {
 router.post('/picker/get-items', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
+    console.log('Picker get-items request body', { body: req.body });
 
     if (!sessionId) {
+      console.error('Picker get-items missing sessionId in request body');
       return res.status(400).json({ error: 'Missing sessionId in request body' });
     }
 
     const oAuth2Client = getAuthClient(req.session.tokens);
     const { token: accessToken } = await oAuth2Client.getAccessToken();
 
-    // Call Google's photoPicker API to get selected items
-    const response = await axios.post(
-      'https://photospicker.googleapis.com/v1/sessions/' + encodeURIComponent(sessionId) + ':getResult',
-      {},
+    const sessionResource = normalizePickerSessionResource(sessionId);
+    console.log('Picker get-items fetching result', {
+      sessionId,
+      sessionResource,
+      accessTokenAvailable: Boolean(accessToken),
+    });
+
+    const response = await axios.get(
+      'https://photospicker.googleapis.com/v1/mediaItems',
       {
+        params: {
+          sessionId: sessionResource
+        },
         headers: {
           Authorization: 'Bearer ' + accessToken,
-          'Content-Type': 'application/json',
         },
       }
     );
 
+    console.log('Photos Picker get-items response', {
+      sessionResource,
+      status: response.status,
+      data: response.data,
+    });
+
     const { mediaItems = [] } = response.data;
 
-    // Map the media items to our standard format
     const mappedItems = mediaItems.map(mapPhotoMediaItem);
 
     console.log('Photos Picker items retrieved:', mappedItems.length);
     return res.json({ files: mappedItems });
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
-    console.error('Photos Picker get-items error:', apiMessage || err.message);
+    console.error('Photos Picker get-items error:', {
+      sessionId: req.body?.sessionId,
+      message: apiMessage || err.message,
+      responseData: err.response?.data,
+      responseHeaders: err.response?.headers,
+    });
     return res.status(err.response?.status || 500).json({
       error: apiMessage || 'Failed to retrieve selected items from Google Photos Picker',
     });

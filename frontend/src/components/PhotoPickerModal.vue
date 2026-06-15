@@ -19,7 +19,6 @@
         <div v-else-if="polling" class="loading-state">
           <div class="spinner"></div>
           <p>Waiting for Google Photos selection to complete...</p>
-          <p v-if="popupClosed">It looks like the popup was closed before completion.</p>
         </div>
 
         <!-- Error state -->
@@ -68,7 +67,6 @@ const isOpen = ref(props.modelValue)
 const loading = ref(false)
 const polling = ref(false)
 const popupBlocked = ref(false)
-const popupClosed = ref(false)
 const error = ref(null)
 const pickerUri = ref(null)
 const sessionId = ref(null)
@@ -94,7 +92,6 @@ async function openPicker() {
     loading.value = true
     polling.value = false
     popupBlocked.value = false
-    popupClosed.value = false
     error.value = null
     pickerCompleted.value = false
     selectedCount.value = 0
@@ -153,14 +150,20 @@ async function openPicker() {
   }
 }
 
+function getPickerUriWithAutoClose() {
+  if (!pickerUri.value) return null
+  return pickerUri.value.endsWith('/autoclose')
+    ? pickerUri.value
+    : `${pickerUri.value}/autoclose`
+}
+
 function openPickerWindow() {
-  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: pickerUri.value, existingPopup: !!popupWindow.value, popupClosed: popupWindow.value?.closed })
+  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: pickerUri.value, existingPopup: !!popupWindow.value })
   if (!pickerUri.value) {
     error.value = 'Missing picker URI from backend.'
     console.error('[PhotoPickerModal] openPickerWindow() missing pickerUri')
     return
   }
-  popupClosed.value = false
 
   if (popupWindow.value && !popupWindow.value.closed) {
     try {
@@ -175,7 +178,7 @@ function openPickerWindow() {
     }
   } else {
     popupWindow.value = window.open(
-      pickerUri.value,
+      getPickerUriWithAutoClose(),
       'googlePhotosPicker',
       'width=900,height=700'
     )
@@ -200,7 +203,7 @@ function openPickerInTab() {
     return
   }
 
-  popupWindow.value = window.open(pickerUri.value, '_blank', 'noopener,noreferrer')
+  popupWindow.value = window.open(getPickerUriWithAutoClose(), '_blank')
   popupBlocked.value = false
   error.value = null
   if (popupWindow.value) {
@@ -222,7 +225,7 @@ function pickerStartedDelayPolling() {
       console.log('[PhotoPickerModal] delayed polling started')
       startStatusPolling()
     }
-  }, 3000)
+  }, 5000)
 }
 
 function startStatusPolling() {
@@ -243,25 +246,14 @@ function stopStatusPolling() {
 async function checkPickerStatus() {
   console.log('[PhotoPickerModal] checkPickerStatus()', {
     sessionId: sessionId.value,
-    popupClosed: popupClosed.value,
     pickerCompleted: pickerCompleted.value,
   })
-
-  if (popupWindow.value && popupWindow.value.closed) {
-    popupClosed.value = true
-    console.warn('[PhotoPickerModal] popup window detected as closed')
-  }
-
-  if (popupClosed.value && !pickerCompleted.value) {
-    stopStatusPolling()
-    polling.value = false
-    error.value = 'Picker popup closed before selection completed.'
-    console.log('[PhotoPickerModal] stopped polling because popup was closed')
-    return
-  }
+  console.log('[PhotoPickerModal] popupWindow state:', {
+    exists: !!popupWindow.value
+  })
 
   try {
-    const { data } = await axios.post(
+    const { data: statusData } = await axios.post(
       '/api/drive/picker/status',
       { sessionId: sessionId.value },
       {
@@ -271,19 +263,30 @@ async function checkPickerStatus() {
       }
     )
 
-    console.log('[PhotoPickerModal] picker status response', data)
-    if (!data.done) {
-      console.log('[PhotoPickerModal] picker not complete yet', { selectedCount: data.selectedCount })
+    console.log('[PhotoPickerModal] picker status response', statusData)
+    if (!statusData.done) {
+      console.log('[PhotoPickerModal] picker not complete yet', { selectedCount: statusData.selectedCount })
       return
     }
 
-    const files = data.files || []
-    selectedCount.value = data.selectedCount || files.length
+    const { data: itemsData } = await axios.post(
+      '/api/drive/picker/get-items',
+      { sessionId: sessionId.value },
+      {
+        headers: {
+          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
+        },
+      }
+    )
+
+    const files = itemsData.files || []
+    selectedCount.value = itemsData.selectedCount || files.length
     pickerCompleted.value = true
     polling.value = false
     stopStatusPolling()
 
     console.log('[PhotoPickerModal] picker complete, items selected', { selectedCount: selectedCount.value })
+    console.log('[PhotoPickerModal] picker complete, items ', files)
     emit('items-selected', files)
     closeModal()
   } catch (err) {
@@ -327,7 +330,6 @@ function closeModal() {
   pickerCompleted.value = false
   error.value = null
   popupBlocked.value = false
-  popupClosed.value = false
   selectedCount.value = 0
   emit('update:modelValue', false)
 }
