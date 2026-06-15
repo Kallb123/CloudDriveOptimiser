@@ -7,12 +7,11 @@ services:
     env_file:
       - .env
     environment:
-      - NODE_ENV=production
-    volumes:
-      # Persist temp directory across container restarts (optional, for large jobs)
-      - /tmp:/tmp
-    networks:
-      - app-net
+      - NODE_ENV=development
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 15s
@@ -30,9 +29,19 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    networks:
-      - app-net
 
-networks:
-  app-net:
-    driver: bridge
+  redis:
+    image: redis:7.2
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

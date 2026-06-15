@@ -2,6 +2,8 @@
 
 const express = require('express');
 const session = require('express-session');
+const { RedisStore } = require('connect-redis');
+const { createClient } = require('redis');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -17,11 +19,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const isProd = process.env.NODE_ENV === 'production';
 const { version: VERSION } = require("../package.json");
 
 // Trust one proxy hop so Vite dev server or a reverse proxy can preserve session cookies and secure proxy headers.
 app.set('trust proxy', 1);
+
+const redisClient = createClient({ url: REDIS_URL });
+redisClient.on('error', (err) => {
+  console.error('Redis client error:', err);
+});
+redisClient.connect()
+  .then(() => console.log(`Connected to Redis at ${REDIS_URL}`))
+  .catch((err) => console.error('Redis connection failed:', err));
 
 
 console.log(`[cloud-drive-optimiser] v${VERSION} starting`);
@@ -35,6 +46,10 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use(session({
+  store: new RedisStore({
+    client: redisClient,
+    ttl: 24 * 60 * 60, // 1 day
+  }),
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
