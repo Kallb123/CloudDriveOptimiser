@@ -57,10 +57,11 @@ async function downloadFile(drive, fileId, destPath) {
  * Scales to TARGET_HEIGHT while preserving aspect ratio,
  * encodes with h264 at VIDEO_CRF quality.
  */
-function transcodeVideo(inputPath, outputPath, metadata, onProgress) {
+function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
+  const scaleArg = shouldUseWidth ? `${TARGET_HEIGHT}:-2` : `-2:${TARGET_HEIGHT}`;
   const outputOptions = [
     '-map_metadata 0',
-    `-vf scale=-2:${TARGET_HEIGHT}`,
+    `-vf scale=${scaleArg}`,
     '-c:v libx264',
     `-crf ${VIDEO_CRF}`,
     `-preset ${VIDEO_PRESET}`,
@@ -135,6 +136,17 @@ function getFileSize(filePath) {
   } catch {
     return 0;
   }
+}
+
+function isPortraitFromVideoMetadata(metadata) {
+  const width = Number.parseInt(metadata?.width || '0', 10);
+  const height = Number.parseInt(metadata?.height || '0', 10);
+
+  if (width > 0 && height > 0) {
+    return height > width;
+  }
+
+  return false;
 }
 
 function getApiErrorMessage(err, fallbackMessage) {
@@ -378,7 +390,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   console.log(`${LOG_PREFIX} fetching Drive metadata`, { jobId: job.jobId, fileId });
   const { data: meta } = await drive.files.get({
     fileId,
-    fields: 'id, name, mimeType, parents, size, quotaBytesUsed, createdTime',
+    fields: 'id, name, mimeType, parents, size, quotaBytesUsed, createdTime, videoMediaMetadata(width,height)',
   });
 
   job.fileName = meta.name;
@@ -398,12 +410,23 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
 
   job.status = 'transcoding';
   job.progress = 0;
-  await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
-    job.progress = Math.round(pct);
-  });
+  const driveOrientationIsPortrait = isPortraitFromVideoMetadata(meta.videoMediaMetadata || {});
+  await transcodeVideo(
+    inputPath,
+    outputPath,
+    { captureTimestamp: job.captureTimestamp },
+    driveOrientationIsPortrait,
+    (pct) => {
+      job.progress = Math.round(pct);
+    }
+  );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
-  console.log(`${LOG_PREFIX} transcoding complete`, { jobId: job.jobId, newSize: job.newSize });
+  console.log(`${LOG_PREFIX} transcoding complete`, {
+    jobId: job.jobId,
+    newSize: job.newSize,
+    isPortrait: driveOrientationIsPortrait,
+  });
 
   job.status = 'uploading';
   const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
@@ -458,12 +481,24 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
 
   job.status = 'transcoding';
   job.progress = 0;
-  await transcodeVideo(inputPath, outputPath, { captureTimestamp: job.captureTimestamp }, (pct) => {
-    job.progress = Math.round(pct);
-  });
+  const photosMetadata = mediaFile.mediaMetadata || mediaItem.mediaMetadata || {};
+  const photosOrientationIsPortrait = isPortraitFromVideoMetadata(photosMetadata);
+  await transcodeVideo(
+    inputPath,
+    outputPath,
+    { captureTimestamp: job.captureTimestamp },
+    photosOrientationIsPortrait,
+    (pct) => {
+      job.progress = Math.round(pct);
+    }
+  );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
-  console.log(`${LOG_PREFIX} transcoding complete`, { jobId: job.jobId, newSize: job.newSize });
+  console.log(`${LOG_PREFIX} transcoding complete`, {
+    jobId: job.jobId,
+    newSize: job.newSize,
+    isPortrait: photosOrientationIsPortrait,
+  });
 
   job.status = 'uploading';
   const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
