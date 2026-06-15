@@ -7,6 +7,7 @@ const path = require('path');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const ffmpeg = require('fluent-ffmpeg');
+const { exiftool } = require('exiftool-vendored');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { getDriveClient, requireAuth } = require('./drive');
 const { createOAuthClient } = require('./auth');
@@ -71,7 +72,7 @@ function getOriginalCreationTime(inputPath) {
  * Scales to TARGET_HEIGHT while preserving aspect ratio,
  * encodes with h264 at VIDEO_CRF quality.
  */
-function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
+async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
   const scaleArg = shouldUseWidth ? `${TARGET_HEIGHT}:-2` : `-2:${TARGET_HEIGHT}`;
   const originalDate = await getOriginalCreationTime(inputPath);
   const outputOptions = [
@@ -86,7 +87,7 @@ function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgr
     '-movflags use_metadata_tags'
   ];
 
-  return new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     const command =
     ffmpeg(inputPath)
       .outputOptions(outputOptions)
@@ -109,6 +110,23 @@ function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgr
       .on('error', reject)
       .run();
   });
+
+  console.log('Cloning all metadata tags (GPS, Device, Timestamps)...');
+    
+  // We pass tags from the original file into the newly generated file.
+  // Specifying "All" copies the entire metadata directory structural tree.
+  await exiftool.write(outputPath, {
+    // 1. Copy everything from the original file
+    SourceFile: inputPath,
+    // 2. Clear out the Rotation tag to avoid the "Double-Rotation" trap
+    Rotation: 0 
+  }, [
+    // Pass raw ExifTool flags: 
+    // '-tagsFromFile' maps the structures, and '-All:All' ensures 1:1 parity
+    '-tagsFromFile', inputPath, '-All:All'
+  ]);
+
+  console.log('Metadata injection successful!');
 }
 
 /**
