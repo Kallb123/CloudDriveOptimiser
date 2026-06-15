@@ -11,7 +11,7 @@ const router = express.Router();
 
 const MAX_FILES = parseInt(process.env.MAX_FILES || '200', 10);
 const FILE_FIELDS =
-  'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents)';
+  'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents, videoMediaMetadata(width,height))';
 
 // Middleware: require authenticated session
 function requireAuth(req, res, next) {
@@ -115,6 +115,9 @@ async function estimatePhotoSize(mediaItem, accessToken) {
 
 function mapDriveFile(file) {
   const isVideo = (file.mimeType || '').startsWith('video/');
+  const width = parseInt(file.videoMediaMetadata?.width || '0', 10);
+  const height = parseInt(file.videoMediaMetadata?.height || '0', 10);
+  const resolution = width > 0 && height > 0 ? `${width}×${height}` : null;
 
   return {
     id: file.id,
@@ -125,6 +128,9 @@ function mapDriveFile(file) {
     modifiedTime: file.modifiedTime,
     thumbnailLink: file.thumbnailLink || null,
     webViewLink: file.webViewLink || null,
+    width: width || null,
+    height: height || null,
+    resolution,
     isVideo,
     source: 'drive',
     optimisable: isVideo,
@@ -133,6 +139,10 @@ function mapDriveFile(file) {
 
 async function mapPhotoMediaItem(mediaItem, accessToken) {
   const mediaFile = mediaItem.mediaFile || mediaItem;
+  const metadata = mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
+  const width = parseInt(metadata.width || '0', 10);
+  const height = parseInt(metadata.height || '0', 10);
+  const resolution = width > 0 && height > 0 ? `${width}×${height}` : null;
   const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
   const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
   const baseUrl = mediaFile.baseUrl || mediaItem.baseUrl || null;
@@ -147,6 +157,9 @@ async function mapPhotoMediaItem(mediaItem, accessToken) {
     // TODO: This thumbnail link needs routing through the backend to avoid exposing the access token in the URL
     thumbnailLink: baseUrl ? `${baseUrl}=w200-h200` : null,
     webViewLink: baseUrl || mediaItem.productUrl || null,
+    width: width || null,
+    height: height || null,
+    resolution,
     mediaItem,
     isVideo,
     source: 'photos',

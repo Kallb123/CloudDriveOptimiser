@@ -29,6 +29,7 @@
           <th v-if="showThumbnails">Thumbnail</th>
           <th>Name</th>
           <th>Size</th>
+          <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
           <th>Type</th>
@@ -36,7 +37,7 @@
       </thead>
       <tbody v-if="optimisableFiles.length > 0">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 7 : 6">Optimisable videos</td>
+          <td :colspan="showThumbnails ? 8 : 7">Optimisable videos</td>
         </tr>
         <tr
           v-for="file in optimisableFiles"
@@ -74,7 +75,8 @@
               {{ file.name }}
             </a>
           </td>
-          <td class="size-cell">{{ formatSize(file.size) }}</td>
+          <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
+          <td class="resolution-cell">{{ fileResolution(file) }}</td>
           <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
           <td class="source-cell">{{ sourceLabel(file.source) }}</td>
           <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
@@ -82,7 +84,7 @@
       </tbody>
       <tbody v-if="otherFiles.length > 0">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 7 : 6">Other files</td>
+          <td :colspan="showThumbnails ? 8 : 7">Other files</td>
         </tr>
         <tr
           v-for="file in otherFiles"
@@ -120,7 +122,8 @@
               {{ file.name }}
             </a>
           </td>
-          <td class="size-cell">{{ formatSize(file.size) }}</td>
+          <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
+          <td class="resolution-cell">{{ fileResolution(file) }}</td>
           <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
           <td class="source-cell">{{ sourceLabel(file.source) }}</td>
           <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
@@ -229,6 +232,12 @@ function shortMime(mime) {
 function sourceLabel(source) {
   return source === 'photos' ? 'Google Photos' : 'Drive'
 }
+
+function fileResolution(file) {
+  if (file.resolution) return file.resolution
+  if (file.width && file.height) return `${file.width}×${file.height}`
+  return '—'
+}
 </script>
 
 <style scoped>
@@ -311,6 +320,12 @@ function sourceLabel(source) {
 .size-cell {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.resolution-cell {
+  white-space: nowrap;
+  color: #4a5568;
+  font-size: 0.9rem;
 }
 
 .date-cell {
