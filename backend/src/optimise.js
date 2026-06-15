@@ -22,11 +22,13 @@ const VIDEO_PRESET = process.env.TRANSCODE_PRESET || 'medium';
 const PHOTOS_API_BASE_URL = 'https://photoslibrary.googleapis.com/v1';
 const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
 const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
+const LOG_PREFIX = '[optimise]';
 
 /**
  * Download a Drive file to a temp path.
  */
 async function downloadFile(drive, fileId, destPath) {
+  console.log(`${LOG_PREFIX} downloading Drive file ${fileId} to ${destPath}`);
   const dest = fs.createWriteStream(destPath);
   const response = await drive.files.get(
     { fileId, alt: 'media' },
@@ -34,10 +36,19 @@ async function downloadFile(drive, fileId, destPath) {
   );
   return new Promise((resolve, reject) => {
     response.data
-      .on('error', reject)
+      .on('error', (err) => {
+        console.error(`${LOG_PREFIX} download error for file ${fileId}:`, err.message);
+        reject(err);
+      })
       .pipe(dest)
-      .on('error', reject)
-      .on('finish', resolve);
+      .on('error', (err) => {
+        console.error(`${LOG_PREFIX} write error for ${destPath}:`, err.message);
+        reject(err);
+      })
+      .on('finish', () => {
+        console.log(`${LOG_PREFIX} completed download of Drive file ${fileId}`);
+        resolve();
+      });
   });
 }
 
@@ -81,6 +92,7 @@ function transcodeVideo(inputPath, outputPath, metadata, onProgress) {
  * Upload a file to Google Drive, inheriting the original file's parent folder.
  */
 async function uploadFile(drive, localPath, name, mimeType, parents) {
+  console.log(`${LOG_PREFIX} uploading ${localPath} to Drive as ${name}`);
   const { data } = await drive.files.create({
     requestBody: {
       name,
@@ -93,6 +105,7 @@ async function uploadFile(drive, localPath, name, mimeType, parents) {
     },
     fields: 'id, name',
   });
+  console.log(`${LOG_PREFIX} uploaded file to Drive: ${data.id}`);
   return data;
 }
 
@@ -228,6 +241,12 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) 
  * Queues optimisation jobs for the supplied file IDs and returns the job IDs.
  */
 router.post('/start', requireAuth, async (req, res) => {
+  console.log(`${LOG_PREFIX} optimisation request received`, {
+    sessionId: req.sessionID,
+    userId: req.session?.user?.id,
+    body: req.body,
+  });
+
   const legacyFileIds = req.body?.fileIds;
   const items = Array.isArray(req.body?.items)
     ? req.body.items
@@ -236,10 +255,15 @@ router.post('/start', requireAuth, async (req, res) => {
       : null;
 
   if (!Array.isArray(items) || items.length === 0) {
+    console.warn(`${LOG_PREFIX} invalid optimisation request: missing or empty items`, {
+      sessionId: req.sessionID,
+      body: req.body,
+    });
     return res.status(400).json({ error: 'items must be a non-empty array' });
   }
 
   if (items.some((item) => !item?.id || (item.source && !['drive', 'photos'].includes(item.source)))) {
+    console.warn(`${LOG_PREFIX} invalid optimisation item`, { sessionId: req.sessionID, items });
     return res.status(400).json({ error: 'each item must include an id; source, when provided, must be drive or photos' });
   }
 
@@ -254,8 +278,9 @@ router.post('/start', requireAuth, async (req, res) => {
 
   // Process jobs asynchronously
   jobIds.forEach(({ jobId, fileId, source }) => {
+    console.log(`${LOG_PREFIX} queued optimisation job`, { jobId, fileId, source });
     processJob(jobId, { fileId, source }, tokens).catch((err) => {
-      console.error(`Job ${jobId} failed:`, err.message);
+      console.error(`${LOG_PREFIX} Job ${jobId} failed:`, err.message);
     });
   });
 
@@ -267,8 +292,16 @@ router.post('/start', requireAuth, async (req, res) => {
  * Returns the current status of an optimisation job.
  */
 router.get('/status/:jobId', requireAuth, (req, res) => {
+  console.log(`${LOG_PREFIX} status requested for job`, {
+    sessionId: req.sessionID,
+    jobId: req.params.jobId,
+  });
   const job = jobs[req.params.jobId];
   if (!job) {
+    console.warn(`${LOG_PREFIX} status request failed - job not found`, {
+      sessionId: req.sessionID,
+      jobId: req.params.jobId,
+    });
     return res.status(404).json({ error: 'Job not found' });
   }
   return res.json(job);
@@ -278,7 +311,11 @@ router.get('/status/:jobId', requireAuth, (req, res) => {
  * GET /api/optimise/status
  * Returns the current status of all jobs in this server process.
  */
-router.get('/status', requireAuth, (_req, res) => {
+router.get('/status', requireAuth, (req, res) => {
+  console.log(`${LOG_PREFIX} status requested for all jobs`, {
+    sessionId: req.sessionID,
+    jobCount: Object.keys(jobs).length,
+  });
   return res.json({ jobs: Object.values(jobs) });
 });
 
@@ -292,20 +329,25 @@ async function processJob(jobId, item, tokens) {
   const inputPath = path.join(tmpDir, `cdo_input_${jobId}`);
   const outputPath = path.join(tmpDir, `cdo_output_${jobId}.mp4`);
 
+  console.log(`${LOG_PREFIX} starting job`, { jobId, fileId, source, tmpDir });
   try {
     if (source === 'photos') {
       await processPhotosJob(job, tokens, fileId, inputPath, outputPath);
     } else {
       await processDriveJob(job, tokens, fileId, inputPath, outputPath);
     }
+    console.log(`${LOG_PREFIX} job complete`, { jobId, newFileId: job.newFileId, uploadedTo: job.uploadedTo });
   } catch (err) {
     job.status = 'error';
     job.error = err.message;
+    console.error(`${LOG_PREFIX} job error`, { jobId, error: err.message });
     throw err;
   } finally {
     // Clean up temp files
     for (const p of [inputPath, outputPath]) {
-      try { fs.unlinkSync(p); } catch (_) { /* ignore */ }
+      try { fs.unlinkSync(p); } catch (cleanupErr) {
+        console.warn(`${LOG_PREFIX} failed to delete temp file`, { path: p, error: cleanupErr.message });
+      }
     }
   }
 }
@@ -314,6 +356,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   const drive = getDriveClient(tokens);
 
   job.status = 'fetching_metadata';
+  console.log(`${LOG_PREFIX} fetching Drive metadata`, { jobId: job.jobId, fileId });
   const { data: meta } = await drive.files.get({
     fileId,
     fields: 'id, name, mimeType, parents, size, quotaBytesUsed, createdTime',
@@ -322,6 +365,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   job.fileName = meta.name;
   job.originalFileName = meta.name;
   job.captureTimestamp = meta.createdTime || null;
+  console.log(`${LOG_PREFIX} Drive metadata fetched`, { jobId: job.jobId, fileId, name: meta.name, mimeType: meta.mimeType, size: meta.size });
 
   if (!meta.mimeType || !meta.mimeType.startsWith('video/')) {
     throw new Error(`File "${meta.name}" is not a video (mimeType: ${meta.mimeType})`);
@@ -331,6 +375,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   job.progress = 0;
   await downloadFile(drive, fileId, inputPath);
   job.originalSize = getFileSize(inputPath) || parseInt(meta.size || meta.quotaBytesUsed || '0', 10);
+  console.log(`${LOG_PREFIX} Drive file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
   job.status = 'transcoding';
   job.progress = 0;
@@ -339,13 +384,16 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   });
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
+  console.log(`${LOG_PREFIX} transcoding complete`, { jobId: job.jobId, newSize: job.newSize });
 
   job.status = 'uploading';
   const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
   const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/mp4', meta.parents);
 
   job.status = 'deleting_original';
+  console.log(`${LOG_PREFIX} deleting original Drive file`, { jobId: job.jobId, fileId });
   await drive.files.delete({ fileId });
+  console.log(`${LOG_PREFIX} original Drive file deleted`, { jobId: job.jobId, fileId });
 
   job.status = 'complete';
   job.newFileId = uploaded.id;
@@ -356,11 +404,18 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
 
 async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
   job.status = 'fetching_metadata';
+  console.log(`${LOG_PREFIX} fetching Photos metadata`, { jobId: job.jobId, fileId });
   const mediaItem = await getPhotoMediaItem(tokens, fileId);
 
   job.fileName = mediaItem.filename || mediaItem.id;
   job.originalFileName = mediaItem.filename || mediaItem.id;
   job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
+  console.log(`${LOG_PREFIX} Photos metadata fetched`, {
+    jobId: job.jobId,
+    fileId,
+    filename: job.fileName,
+    mimeType: mediaItem.mimeType,
+  });
 
   if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith('video/')) {
     throw new Error(`File "${job.fileName}" is not a video (mimeType: ${mediaItem.mimeType})`);
@@ -370,6 +425,7 @@ async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
   job.progress = 0;
   await downloadPhotoVideo(tokens, mediaItem, inputPath);
   job.originalSize = getFileSize(inputPath);
+  console.log(`${LOG_PREFIX} Photos file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
   job.status = 'transcoding';
   job.progress = 0;
@@ -378,6 +434,7 @@ async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
   });
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
+  console.log(`${LOG_PREFIX} transcoding complete`, { jobId: job.jobId, newSize: job.newSize });
 
   job.status = 'uploading';
   const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
@@ -388,6 +445,7 @@ async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
     'video/mp4',
     mediaItem.description || undefined
   );
+  console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
 
   job.status = 'complete';
   job.newFileId = uploaded.id;
