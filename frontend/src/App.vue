@@ -109,7 +109,8 @@ const authError = ref(false)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 
-let pollInterval = null
+let pollTimer = null
+let pollingActive = false
 
 // ---- Auth ----
 
@@ -213,7 +214,7 @@ async function startOptimise(items) {
 }
 
 async function pollJobs() {
-  if (jobList.value.length === 0) return
+  if (!pollingActive || jobList.value.length === 0) return
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs
@@ -226,21 +227,31 @@ async function pollJobs() {
       optimising.value = false
       // Refresh file list after optimisation
       if (analysed.value) await analyseFiles()
+      return
     }
   } catch {
     // Silently ignore poll errors
   }
+
+  if (pollingActive) {
+    pollTimer = setTimeout(async () => {
+      pollTimer = null
+      await pollJobs()
+    }, 2000)
+  }
 }
 
 function startPolling() {
-  if (pollInterval) return
-  pollInterval = setInterval(pollJobs, 2000)
+  if (pollingActive) return
+  pollingActive = true
+  pollJobs()
 }
 
 function stopPolling() {
-  if (pollInterval) {
-    clearInterval(pollInterval)
-    pollInterval = null
+  pollingActive = false
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
   }
 }
 

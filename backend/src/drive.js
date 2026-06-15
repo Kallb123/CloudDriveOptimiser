@@ -41,16 +41,73 @@ function parseDurationSeconds(duration) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
-function estimatePhotoSize(mediaItem) {
-  const metadata = mediaItem.mediaMetadata || {};
+async function getVideoFileSizeOld(baseUrl) {
+  try {
+    // Append '=dv' to the baseUrl to request the raw video bytes, 
+    // rather than the default thumbnail image.
+    const videoUrl = `${baseUrl}=dv`; 
+    
+    // Make a HEAD request instead of a GET request
+    const response = await axios.head(videoUrl);
+    
+    // Extract the size from the Content-Length header
+    const bytes = response.headers['content-length'];
+    const megabytes = (bytes / (1024 * 1024)).toFixed(2);
+    
+    console.log(`Video size: ${megabytes} MB`);
+    return bytes;
+  } catch (error) {
+    console.error('Failed to fetch file size:', error.message);
+  }
+}
+
+async function getVideoFileSize(baseUrl, accessToken) {
+  try {
+    const videoUrl = `${baseUrl}=dv`;
+    
+    const response = await axios.get(videoUrl, {
+      headers: {
+        Authorization: 'Bearer ' + accessToken,
+        // Ask for only the first byte of the file
+        'Range': 'bytes=0-0' 
+      }
+    });
+    
+    // The server responds with a header like: "bytes 0-0/15432098"
+    const contentRange = response.headers['content-range'];
+    
+    if (contentRange) {
+      // Split the string to extract the total size after the slash
+      const totalBytes = parseInt(contentRange.split('/')[1], 10);
+      const megabytes = (totalBytes / (1024 * 1024)).toFixed(2);
+      
+      console.log(`Video size: ${megabytes} MB`);
+      return totalBytes;
+    }
+
+    // Fallback just in case the server ignored the Range header
+    return parseInt(response.headers['content-length'], 10);
+
+  } catch (error) {
+    console.error(
+      'Failed to fetch file size:', 
+      error.response?.status, 
+      error.response?.statusText || error.message
+    );
+  }
+}
+
+async function estimatePhotoSize(mediaItem, accessToken) {
+  const mediaFile = mediaItem.mediaFile || mediaItem;
+  const metadata = mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
   const width = parseInt(metadata.width || '0', 10);
   const height = parseInt(metadata.height || '0', 10);
   const pixelCount = width > 0 && height > 0 ? width * height : 0;
+  const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
+  const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
 
-  if ((mediaItem.mimeType || '').startsWith('video/')) {
-    const duration = parseDurationSeconds(metadata.video?.duration);
-    if (duration <= 0) return 0;
-    return pixelCount > 0 ? Math.round(pixelCount * duration) : Math.round(duration);
+  if (isVideo) {
+    return await getVideoFileSize(mediaFile.baseUrl || mediaItem.baseUrl || '', accessToken);
   }
 
   return pixelCount;
@@ -74,18 +131,21 @@ function mapDriveFile(file) {
   };
 }
 
-function mapPhotoMediaItem(mediaItem) {
-  const isVideo = (mediaItem.mimeType || '').startsWith('video/');
+async function mapPhotoMediaItem(mediaItem, accessToken) {
+  const mediaFile = mediaItem.mediaFile || mediaItem;
+  const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
+  const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
+  const baseUrl = mediaFile.baseUrl || mediaItem.baseUrl || null;
 
   return {
     id: mediaItem.id,
-    name: mediaItem.filename,
-    size: estimatePhotoSize(mediaItem),
-    mimeType: mediaItem.mimeType,
-    createdTime: mediaItem.mediaMetadata?.creationTime || null,
-    modifiedTime: mediaItem.mediaMetadata?.creationTime || null,
-    thumbnailLink: null,
-    webViewLink: mediaItem.productUrl || null,
+    name: mediaFile.filename || mediaItem.filename || mediaItem.name || mediaItem.id,
+    size: await estimatePhotoSize(mediaItem, accessToken),
+    mimeType,
+    createdTime: mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
+    modifiedTime: mediaItem.updateTime || mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
+    thumbnailLink: baseUrl ? `${baseUrl}=w200-h200` : null,
+    webViewLink: baseUrl || mediaItem.productUrl || null,
     isVideo,
     source: 'photos',
     optimisable: isVideo,
@@ -325,7 +385,7 @@ router.post('/picker/status', requireAuth, async (req, res) => {
       return res.json({ done: false, mediaItemsSet: false, selectedCount: mediaItems.length });
     }
 
-    const mappedItems = mediaItems.map(mapPhotoMediaItem);
+    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken)));
     return res.json({ done: true, mediaItemsSet: true, selectedCount: mappedItems.length, files: mappedItems });
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
@@ -383,10 +443,13 @@ router.post('/picker/get-items', requireAuth, async (req, res) => {
       status: response.status,
       data: response.data,
     });
+    console.log('Photos Picker data', JSON.stringify(response.data, null, 2));
 
     const { mediaItems = [] } = response.data;
 
-    const mappedItems = mediaItems.map(mapPhotoMediaItem);
+    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken)));
+
+    console.log('Photos Picker mapped data:', JSON.stringify(mappedItems, null, 2));
 
     console.log('Photos Picker items retrieved:', mappedItems.length);
     return res.json({ files: mappedItems });

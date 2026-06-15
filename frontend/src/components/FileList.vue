@@ -51,7 +51,14 @@
           </td>
           <td v-if="showThumbnails" class="thumb-cell">
             <img
-              v-if="file.thumbnailLink"
+              v-if="file.source === 'photos' && file.thumbnailLink"
+              :src="file.thumbnailLink"
+              :alt="file.name"
+              class="thumbnail"
+              loading="lazy"
+            />
+            <img
+              v-else-if="file.source !== 'photos' && file.thumbnailLink"
               :src="`/api/drive/thumbnail/${file.id}`"
               :alt="file.name"
               class="thumbnail"

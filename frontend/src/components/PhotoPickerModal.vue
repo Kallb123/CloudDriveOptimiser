@@ -74,6 +74,7 @@ const pickerCompleted = ref(false)
 const selectedCount = ref(0)
 const popupWindow = ref(null)
 let pollTimer = null
+let statusPollingActive = false
 
 // Watch for external changes to the modal value
 watch(
@@ -158,7 +159,7 @@ function getPickerUriWithAutoClose() {
 }
 
 function openPickerWindow() {
-  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: pickerUri.value, existingPopup: !!popupWindow.value })
+  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: getPickerUriWithAutoClose(), existingPopup: !!popupWindow.value })
   if (!pickerUri.value) {
     error.value = 'Missing picker URI from backend.'
     console.error('[PhotoPickerModal] openPickerWindow() missing pickerUri')
@@ -167,7 +168,7 @@ function openPickerWindow() {
 
   if (popupWindow.value && !popupWindow.value.closed) {
     try {
-      popupWindow.value.location.href = pickerUri.value
+      popupWindow.value.location.href = getPickerUriWithAutoClose()
       popupWindow.value.focus()
       console.log('[PhotoPickerModal] reused existing popup and navigated to pickerUri')
     } catch (_err) {
@@ -197,7 +198,7 @@ function openPickerWindow() {
 }
 
 function openPickerInTab() {
-  console.log('[PhotoPickerModal] openPickerInTab()', { pickerUri: pickerUri.value })
+  console.log('[PhotoPickerModal] openPickerInTab()', { pickerUri: getPickerUriWithAutoClose() })
   if (!pickerUri.value) {
     console.warn('[PhotoPickerModal] openPickerInTab() no pickerUri available')
     return
@@ -231,16 +232,27 @@ function pickerStartedDelayPolling() {
 function startStatusPolling() {
   console.log('[PhotoPickerModal] startStatusPolling()')
   stopStatusPolling()
-  pollTimer = setInterval(checkPickerStatus, 2000)
+  statusPollingActive = true
   checkPickerStatus()
+}
+
+function scheduleStatusPoll(delay = 2000) {
+  if (pollTimer) return
+  pollTimer = setTimeout(async () => {
+    pollTimer = null
+    if (statusPollingActive && !pickerCompleted.value) {
+      await checkPickerStatus()
+    }
+  }, delay)
 }
 
 function stopStatusPolling() {
   if (pollTimer) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
-    console.log('[PhotoPickerModal] stopStatusPolling()')
   }
+  statusPollingActive = false
+  console.log('[PhotoPickerModal] stopStatusPolling()')
 }
 
 async function checkPickerStatus() {
@@ -266,6 +278,9 @@ async function checkPickerStatus() {
     console.log('[PhotoPickerModal] picker status response', statusData)
     if (!statusData.done) {
       console.log('[PhotoPickerModal] picker not complete yet', { selectedCount: statusData.selectedCount })
+      if (statusPollingActive && !pickerCompleted.value) {
+        scheduleStatusPoll(2000)
+      }
       return
     }
 
