@@ -72,6 +72,7 @@ function getOriginalCreationTime(inputPath) {
  * encodes with h264 at VIDEO_CRF quality.
  */
 async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
+  console.log(`${LOG_PREFIX} transcoding video ${inputPath} to ${outputPath} with target height ${TARGET_HEIGHT} ${shouldUseWidth}`);
   const scaleArg = shouldUseWidth ? `${TARGET_HEIGHT}:-2` : `-2:${TARGET_HEIGHT}`;
   const originalDate = await getOriginalCreationTime(inputPath);
   const outputOptions = [
@@ -177,15 +178,64 @@ function getFileSize(filePath) {
   }
 }
 
+function parseVideoDimension(value) {
+  const parsed = Number.parseInt(String(value || '').trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function isPortraitFromVideoMetadata(metadata) {
-  const width = Number.parseInt(metadata?.width || '0', 10);
-  const height = Number.parseInt(metadata?.height || '0', 10);
+  const width = parseVideoDimension(metadata?.width || metadata?.videoMediaMetadata?.width);
+  const height = parseVideoDimension(metadata?.height || metadata?.videoMediaMetadata?.height);
 
   if (width > 0 && height > 0) {
+    const rotation = parseVideoDimension(metadata?.rotation || metadata?.rotate || metadata?.videoMediaMetadata?.rotation);
+    if (rotation === 90 || rotation === 270) {
+      return width > height;
+    }
     return height > width;
   }
 
-  return false;
+  return null;
+}
+
+function getVideoOrientation(inputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) {
+        return reject(err);
+      }
+
+      const stream = metadata.streams?.find((s) => s.codec_type === 'video');
+      if (!stream) {
+        return reject(new Error('No video stream found for orientation detection'));
+      }
+
+      let width = stream.width;
+      let height = stream.height;
+      const rotation = parseInt(stream.tags?.rotate || '0', 10) || 0;
+
+      if (rotation === 90 || rotation === 270) {
+        [width, height] = [height, width];
+      }
+
+      resolve({
+        width,
+        height,
+        rotation,
+        isPortrait: height > width,
+      });
+    });
+  });
+}
+
+async function determinePortraitOrientation(inputPath, metadata) {
+  const metadataPortrait = isPortraitFromVideoMetadata(metadata);
+  if (metadataPortrait !== null) {
+    return metadataPortrait;
+  }
+
+  const orientation = await getVideoOrientation(inputPath);
+  return orientation.isPortrait;
 }
 
 function getApiErrorMessage(err, fallbackMessage) {
@@ -470,7 +520,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
 
   job.status = 'transcoding';
   job.progress = 0;
-  const driveOrientationIsPortrait = isPortraitFromVideoMetadata(meta.videoMediaMetadata || {});
+  const driveOrientationIsPortrait = await determinePortraitOrientation(inputPath, meta.videoMediaMetadata || {});
   await transcodeVideo(
     inputPath,
     outputPath,
@@ -549,7 +599,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   job.progress = 0;
   await jobStore.saveJob(job);
   const photosMetadata = mediaFile.mediaMetadata || mediaItem.mediaMetadata || {};
-  const photosOrientationIsPortrait = isPortraitFromVideoMetadata(photosMetadata);
+  const photosOrientationIsPortrait = await determinePortraitOrientation(inputPath, photosMetadata);
   await transcodeVideo(
     inputPath,
     outputPath,
