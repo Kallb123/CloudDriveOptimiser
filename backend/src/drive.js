@@ -137,7 +137,14 @@ function mapDriveFile(file) {
   };
 }
 
-async function mapPhotoMediaItem(mediaItem, accessToken) {
+function ensurePhotoThumbnailMap(session) {
+  if (!session.photoThumbnailUrls) {
+    session.photoThumbnailUrls = {};
+  }
+  return session.photoThumbnailUrls;
+}
+
+async function mapPhotoMediaItem(mediaItem, accessToken, session) {
   const mediaFile = mediaItem.mediaFile || mediaItem;
   const metadata = mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
   const width = parseInt(metadata.width || '0', 10);
@@ -146,6 +153,14 @@ async function mapPhotoMediaItem(mediaItem, accessToken) {
   const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
   const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
   const baseUrl = mediaFile.baseUrl || mediaItem.baseUrl || null;
+  const thumbnailRoute = mediaItem.id && baseUrl
+    ? `/api/drive/photo-thumbnail/${encodeURIComponent(mediaItem.id)}`
+    : null;
+
+  if (mediaItem.id && baseUrl && session) {
+    const thumbnailUrls = ensurePhotoThumbnailMap(session);
+    thumbnailUrls[mediaItem.id] = baseUrl;
+  }
 
   return {
     id: mediaItem.id,
@@ -154,8 +169,7 @@ async function mapPhotoMediaItem(mediaItem, accessToken) {
     mimeType,
     createdTime: mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
     modifiedTime: mediaItem.updateTime || mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
-    // TODO: This thumbnail link needs routing through the backend to avoid exposing the access token in the URL
-    thumbnailLink: baseUrl ? `${baseUrl}=w200-h200` : null,
+    thumbnailLink: thumbnailRoute,
     webViewLink: baseUrl || mediaItem.productUrl || null,
     width: width || null,
     height: height || null,
@@ -266,6 +280,40 @@ router.get('/thumbnail/:fileId', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Thumbnail error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch thumbnail' });
+  }
+});
+
+/**
+ * GET /api/drive/photo-thumbnail/:mediaItemId
+ * Proxies Google Photos thumbnail requests through the backend so the browser
+ * does not need to fetch protected photo URLs directly.
+ */
+router.get('/photo-thumbnail/:mediaItemId', requireAuth, async (req, res) => {
+  try {
+    const mediaItemId = req.params.mediaItemId;
+    const thumbnailUrls = req.session.photoThumbnailUrls || {};
+    const baseUrl = thumbnailUrls[mediaItemId];
+
+    if (!baseUrl) {
+      return res.status(404).json({ error: 'Thumbnail source not found' });
+    }
+
+    const oAuth2Client = getAuthClient(req.session.tokens);
+    const { token: accessToken } = await oAuth2Client.getAccessToken();
+    const thumbnailUrl = `${baseUrl}=w200-h200`;
+
+    const imgResponse = await axios.get(thumbnailUrl, {
+      responseType: 'stream',
+      headers: {
+        Authorization: 'Bearer ' + accessToken,
+      },
+    });
+
+    res.setHeader('Content-Type', imgResponse.headers['content-type'] || 'image/jpeg');
+    imgResponse.data.pipe(res);
+  } catch (err) {
+    console.error('Photo thumbnail proxy error:', err.response?.status, err.message);
+    return res.status(500).json({ error: 'Failed to fetch photo thumbnail' });
   }
 });
 
@@ -400,7 +448,7 @@ router.post('/picker/status', requireAuth, async (req, res) => {
       return res.json({ done: false, mediaItemsSet: false, selectedCount: mediaItems.length });
     }
 
-    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken)));
+    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken, req.session)));
     return res.json({ done: true, mediaItemsSet: true, selectedCount: mappedItems.length, files: mappedItems });
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
@@ -462,7 +510,7 @@ router.post('/picker/get-items', requireAuth, async (req, res) => {
 
     const { mediaItems = [] } = response.data;
 
-    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken)));
+    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken, req.session)));
 
     console.log('Photos Picker mapped data:', JSON.stringify(mappedItems, null, 2));
 
