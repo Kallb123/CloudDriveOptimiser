@@ -262,29 +262,34 @@ router.post('/start', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'items must be a non-empty array' });
   }
 
-  if (items.some((item) => !item?.id || (item.source && !['drive', 'photos'].includes(item.source)))) {
+  if (items.some((item) => {
+    const hasId = Boolean(item?.id || item?.mediaItem?.id);
+    return !hasId || (item.source && !['drive', 'photos'].includes(item.source));
+  })) {
     console.warn(`${LOG_PREFIX} invalid optimisation item`, { sessionId: req.sessionID, items });
-    return res.status(400).json({ error: 'each item must include an id; source, when provided, must be drive or photos' });
+    return res.status(400).json({ error: 'each item must include an id or mediaItem; source, when provided, must be drive or photos' });
   }
 
-  const jobIds = items.map(({ id: fileId, source = 'drive' }) => {
+  const queuedJobs = items.map((item) => {
     const jobId = uuidv4();
+    const fileId = item.id || item.mediaItem?.id;
+    const source = item.source || 'drive';
     jobs[jobId] = { jobId, fileId, source, status: 'queued', progress: 0, error: null };
-    return { jobId, fileId, source };
+    return { jobId, fileId, source, item };
   });
 
   // Snapshot session tokens once so the async workers have a copy
   const tokens = req.session.tokens;
 
   // Process jobs asynchronously
-  jobIds.forEach(({ jobId, fileId, source }) => {
+  queuedJobs.forEach(({ jobId, fileId, source, item }) => {
     console.log(`${LOG_PREFIX} queued optimisation job`, { jobId, fileId, source });
-    processJob(jobId, { fileId, source }, tokens).catch((err) => {
+    processJob(jobId, item, tokens).catch((err) => {
       console.error(`${LOG_PREFIX} Job ${jobId} failed:`, err.message);
     });
   });
 
-  return res.json({ jobs: jobIds });
+  return res.json({ jobs: queuedJobs.map(({ jobId, fileId, source }) => ({ jobId, fileId, source })) });
 });
 
 /**
@@ -332,7 +337,7 @@ async function processJob(jobId, item, tokens) {
   console.log(`${LOG_PREFIX} starting job`, { jobId, fileId, source, tmpDir });
   try {
     if (source === 'photos') {
-      await processPhotosJob(job, tokens, fileId, inputPath, outputPath);
+      await processPhotosJob(job, tokens, item, inputPath, outputPath);
     } else {
       await processDriveJob(job, tokens, fileId, inputPath, outputPath);
     }
@@ -402,17 +407,27 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   job.manualCleanupRequired = false;
 }
 
-async function processPhotosJob(job, tokens, fileId, inputPath, outputPath) {
+async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
+  console.log(`${LOG_PREFIX} processing Google Photos job`, { job, item });
+  const mediaItemInput = item.mediaItem || null;
+  const photoId = item.id || mediaItemInput?.id;
+  const mediaFile = mediaItemInput?.mediaFile || mediaItemInput;
   job.status = 'fetching_metadata';
-  console.log(`${LOG_PREFIX} fetching Photos metadata`, { jobId: job.jobId, fileId });
-  const mediaItem = await getPhotoMediaItem(tokens, fileId);
+  console.log(`${LOG_PREFIX} fetching Photos metadata`, { jobId: job.jobId, photoId });
+
+  const mediaItem = mediaFile || (photoId ? await getPhotoMediaItem(tokens, photoId) : null);
+  if (!mediaItem) {
+    throw new Error('Missing Google Photos media item metadata for optimisation');
+  }
 
   job.fileName = mediaItem.filename || mediaItem.id;
   job.originalFileName = mediaItem.filename || mediaItem.id;
   job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
+  job.fileId = mediaItem.id;
+  job.mediaItem = mediaItem;
   console.log(`${LOG_PREFIX} Photos metadata fetched`, {
     jobId: job.jobId,
-    fileId,
+    photoId,
     filename: job.fileName,
     mimeType: mediaItem.mimeType,
   });

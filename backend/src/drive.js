@@ -146,6 +146,7 @@ async function mapPhotoMediaItem(mediaItem, accessToken) {
     modifiedTime: mediaItem.updateTime || mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
     thumbnailLink: baseUrl ? `${baseUrl}=w200-h200` : null,
     webViewLink: baseUrl || mediaItem.productUrl || null,
+    mediaItem,
     isVideo,
     source: 'photos',
     optimisable: isVideo,

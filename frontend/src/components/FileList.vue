@@ -106,7 +106,13 @@ const videoFiles = computed(() => props.files.filter((f) => f.optimisable))
 const selectedItems = computed(() =>
   props.files
     .filter((file) => selectedIds.value.includes(file.id))
-    .map((file) => ({ id: file.id, source: file.source || 'drive' }))
+    .map((file) => {
+      const item = { id: file.id, source: file.source || 'drive' }
+      if (file.source === 'photos' && file.mediaItem) {
+        item.mediaItem = file.mediaItem
+      }
+      return item
+    })
 )
 const allSelected = computed(
   () => videoFiles.value.length > 0 && videoFiles.value.every((f) => selectedIds.value.includes(f.id))
