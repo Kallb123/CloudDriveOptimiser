@@ -87,6 +87,8 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
     '-movflags use_metadata_tags'
   ];
 
+  console.log(`${LOG_PREFIX} attempting to preserve metadata:`, JSON.stringify(metadata, null, 2));
+
   await new Promise((resolve, reject) => {
     const command =
     ffmpeg(inputPath)
@@ -111,22 +113,54 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
       .run();
   });
 
-  console.log('Cloning all metadata tags (GPS, Device, Timestamps)...');
-    
-  // We pass tags from the original file into the newly generated file.
-  // Specifying "All" copies the entire metadata directory structural tree.
-  await exiftool.write(outputPath, {
-    // 1. Copy everything from the original file
-    SourceFile: inputPath,
-    // 2. Clear out the Rotation tag to avoid the "Double-Rotation" trap
-    Rotation: 0 
-  }, [
-    // Pass raw ExifTool flags: 
-    // '-tagsFromFile' maps the structures, and '-All:All' ensures 1:1 parity
-    '-tagsFromFile', inputPath, '-All:All'
+  console.log(`${LOG_PREFIX} Cloning and preserving metadata tags (GPS, timestamp, location)...`);
+
+  const exifTags = { Rotation: 0 };
+  if (metadata.captureTimestamp) {
+    exifTags.CreateDate = metadata.captureTimestamp;
+    exifTags.ModifyDate = metadata.captureTimestamp;
+    exifTags.TrackCreateDate = metadata.captureTimestamp;
+    exifTags.MediaCreateDate = metadata.captureTimestamp;
+    exifTags.DateTimeOriginal = metadata.captureTimestamp;
+  }
+
+  if (metadata.location?.latitude != null && metadata.location?.longitude != null) {
+    const lat = Number(metadata.location.latitude);
+    const lng = Number(metadata.location.longitude);
+
+    if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+      exifTags.GPSLatitude = lat;
+      exifTags.GPSLongitude = lng;
+      exifTags.GPSLatitudeRef = lat >= 0 ? 'N' : 'S';
+      exifTags.GPSLongitudeRef = lng >= 0 ? 'E' : 'W';
+      if (metadata.location.altitude != null) {
+        const alt = Number(metadata.location.altitude);
+        if (!Number.isNaN(alt)) {
+          exifTags.GPSAltitude = alt;
+          exifTags.GPSAltitudeRef = alt >= 0 ? 'Above Sea Level' : 'Below Sea Level';
+        }
+      }
+    }
+  }
+
+  await exiftool.write(outputPath, exifTags, [
+    '-overwrite_original',
+    '-tagsFromFile', inputPath,
+    '-All:All'
   ]);
 
-  console.log('Metadata injection successful!');
+  if (metadata.captureTimestamp) {
+    try {
+      const ts = new Date(metadata.captureTimestamp);
+      if (!Number.isNaN(ts.getTime())) {
+        await fs.promises.utimes(outputPath, ts, ts);
+      }
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} failed to set output file timestamp`, { path: outputPath, error: err.message });
+    }
+  }
+
+  console.log(`${LOG_PREFIX} Metadata injection successful!`);
 }
 
 /**
@@ -394,6 +428,7 @@ router.post('/start', requireAuth, async (req, res) => {
       jobId,
       sessionId: req.sessionID,
       fileId,
+      item,
       source,
       status: 'queued',
       progress: 0,
@@ -561,6 +596,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   const mediaItemInput = item.mediaItem || null;
   const photoId = item.id || mediaItemInput?.id;
   const mediaFile = mediaItemInput?.mediaFile || mediaItemInput;
+  console.log(`${LOG_PREFIX} mediafile`, { mediaFile });
   job.status = 'fetching_metadata';
   await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} fetching Photos metadata`, { jobId: job.jobId, photoId });
@@ -569,10 +605,13 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   if (!mediaItem) {
     throw new Error('Missing Google Photos media item metadata for optimisation');
   }
+  
+  const photosMetadata = mediaFile.mediaMetadata || mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
+  console.log(`${LOG_PREFIX} photosMetadata`, JSON.stringify(photosMetadata, null, 2));
 
-  job.fileName = mediaItem.filename || mediaItem.id;
-  job.originalFileName = mediaItem.filename || mediaItem.id;
-  job.captureTimestamp = mediaItem.mediaMetadata?.creationTime || null;
+  job.fileName = photosMetadata.filename || mediaItem.filename || mediaItem.id;
+  job.originalFileName = photosMetadata.filename ||mediaItem.filename || mediaItem.id;
+  job.captureTimestamp = photosMetadata.creationTime || mediaItem?.mediaMetadata?.creationTime || mediaItemInput?.createTime || null;
   job.fileId = mediaItem.id;
   job.mediaItem = mediaItem;
   await jobStore.saveJob(job);
@@ -598,12 +637,14 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   job.status = 'transcoding';
   job.progress = 0;
   await jobStore.saveJob(job);
-  const photosMetadata = mediaFile.mediaMetadata || mediaItem.mediaMetadata || {};
   const photosOrientationIsPortrait = await determinePortraitOrientation(inputPath, photosMetadata);
   await transcodeVideo(
     inputPath,
     outputPath,
-    { captureTimestamp: job.captureTimestamp },
+    {
+      ...photosMetadata,
+      captureTimestamp: job.captureTimestamp,
+    },
     photosOrientationIsPortrait,
     (pct) => {
       job.progress = Math.round(pct);
