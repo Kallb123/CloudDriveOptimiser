@@ -117,7 +117,16 @@ function getPhotosAuthClient(tokens) {
 
 async function getPhotosRequestHeaders(tokens) {
   const authClient = getPhotosAuthClient(tokens);
-  return authClient.getRequestHeaders();
+  const accessTokenResponse = await authClient.getAccessToken();
+  const accessToken = accessTokenResponse?.token || accessTokenResponse;
+
+  if (!accessToken) {
+    throw new Error('Unable to obtain a valid Google access token for Photos API requests. Please re-authenticate.');
+  }
+
+  return {
+    Authorization: `Bearer ${accessToken}`,
+  };
 }
 
 function getFileSize(filePath) {
@@ -177,6 +186,8 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) 
 
   let uploadToken;
   try {
+    console.log(`${LOG_PREFIX} uploading ${localPath} to Google Photos as ${name}`);
+    console.log(`${LOG_PREFIX} upload size: ${uploadSize} bytes, mimeType: ${mimeType}`);
     const uploadResponse = await axios.post(PHOTOS_UPLOAD_URL, fs.createReadStream(localPath), {
       headers: {
         ...headers,
@@ -185,11 +196,14 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) 
         'X-Goog-Upload-Protocol': 'raw',
         'X-Goog-Upload-Content-Type': mimeType,
       },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
       responseType: 'text',
       transformResponse: [(data) => data],
     });
 
     uploadToken = String(uploadResponse.data || '').trim();
+    console.log(`${LOG_PREFIX} received upload token from Google Photos:`, uploadToken);
   } catch (err) {
     throw new Error(getApiErrorMessage(err, 'Failed to upload optimised video bytes to Google Photos'));
   }
