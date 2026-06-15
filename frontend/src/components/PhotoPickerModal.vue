@@ -89,6 +89,7 @@ watch(
 )
 
 async function openPicker() {
+  console.log('[PhotoPickerModal] openPicker() starting')
   try {
     loading.value = true
     polling.value = false
@@ -101,6 +102,7 @@ async function openPicker() {
     if (!isOpen.value) {
       isOpen.value = true
       emit('update:modelValue', true)
+      console.log('[PhotoPickerModal] modal opened')
     }
 
     popupWindow.value = window.open(
@@ -113,6 +115,7 @@ async function openPicker() {
       loading.value = false
       popupBlocked.value = true
       error.value = 'Popup blocked. Please open the picker in a new tab.'
+      console.log('[PhotoPickerModal] popup blocked when opening placeholder window')
       return
     }
 
@@ -121,7 +124,7 @@ async function openPicker() {
         popupWindow.value.document.write('<p style="font-family: sans-serif; padding: 1rem;">Opening Google Photos Picker…</p>')
       }
     } catch (_err) {
-      // Some browsers prevent writing to a popup window.
+      console.warn('[PhotoPickerModal] could not write to popup window placeholder:', _err)
     }
 
     const { data } = await axios.post(
@@ -136,6 +139,7 @@ async function openPicker() {
 
     pickerUri.value = data.pickerUri
     sessionId.value = data.sessionId
+    console.log('[PhotoPickerModal] picker session created', { sessionId: sessionId.value, pickerUri: pickerUri.value })
 
     openPickerWindow()
     loading.value = false
@@ -145,23 +149,28 @@ async function openPicker() {
       err.response?.data?.error ||
       err.message ||
       'Failed to create Google Photos Picker session'
-    console.error('Picker creation error:', error.value)
+    console.error('[PhotoPickerModal] Picker creation error:', error.value, err)
   }
 }
 
 function openPickerWindow() {
+  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: pickerUri.value, existingPopup: !!popupWindow.value, popupClosed: popupWindow.value?.closed })
   if (!pickerUri.value) {
     error.value = 'Missing picker URI from backend.'
+    console.error('[PhotoPickerModal] openPickerWindow() missing pickerUri')
     return
   }
+  popupClosed.value = false
 
   if (popupWindow.value && !popupWindow.value.closed) {
     try {
       popupWindow.value.location.href = pickerUri.value
       popupWindow.value.focus()
+      console.log('[PhotoPickerModal] reused existing popup and navigated to pickerUri')
     } catch (_err) {
       popupBlocked.value = false
       error.value = 'Unable to load the picker in the opened popup. Please refresh and try again.'
+      console.error('[PhotoPickerModal] openPickerWindow() navigation failed', _err)
       return
     }
   } else {
@@ -174,26 +183,50 @@ function openPickerWindow() {
     if (!popupWindow.value) {
       popupBlocked.value = true
       error.value = 'Popup blocked. Please open the picker in a new tab.'
+      console.error('[PhotoPickerModal] popup blocked when opening pickerUri')
       return
     }
+    console.log('[PhotoPickerModal] opened new popup window for pickerUri')
   }
 
   polling.value = true
-  startStatusPolling()
+  pickerStartedDelayPolling()
 }
 
 function openPickerInTab() {
-  if (!pickerUri.value) return
+  console.log('[PhotoPickerModal] openPickerInTab()', { pickerUri: pickerUri.value })
+  if (!pickerUri.value) {
+    console.warn('[PhotoPickerModal] openPickerInTab() no pickerUri available')
+    return
+  }
+
   popupWindow.value = window.open(pickerUri.value, '_blank', 'noopener,noreferrer')
   popupBlocked.value = false
   error.value = null
   if (popupWindow.value) {
+    console.log('[PhotoPickerModal] opened picker in new tab')
     polling.value = true
-    startStatusPolling()
+    pickerStartedDelayPolling()
+  } else {
+    popupBlocked.value = true
+    error.value = 'Popup blocked. Please open the picker in a new tab.'
+    console.error('[PhotoPickerModal] openPickerInTab() blocked')
   }
 }
 
+function pickerStartedDelayPolling() {
+  console.log('[PhotoPickerModal] pickerStartedDelayPolling()')
+  stopStatusPolling()
+  pollTimer = setTimeout(() => {
+    if (!pickerCompleted.value) {
+      console.log('[PhotoPickerModal] delayed polling started')
+      startStatusPolling()
+    }
+  }, 3000)
+}
+
 function startStatusPolling() {
+  console.log('[PhotoPickerModal] startStatusPolling()')
   stopStatusPolling()
   pollTimer = setInterval(checkPickerStatus, 2000)
   checkPickerStatus()
@@ -203,18 +236,27 @@ function stopStatusPolling() {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
+    console.log('[PhotoPickerModal] stopStatusPolling()')
   }
 }
 
 async function checkPickerStatus() {
+  console.log('[PhotoPickerModal] checkPickerStatus()', {
+    sessionId: sessionId.value,
+    popupClosed: popupClosed.value,
+    pickerCompleted: pickerCompleted.value,
+  })
+
   if (popupWindow.value && popupWindow.value.closed) {
     popupClosed.value = true
+    console.warn('[PhotoPickerModal] popup window detected as closed')
   }
 
   if (popupClosed.value && !pickerCompleted.value) {
     stopStatusPolling()
     polling.value = false
     error.value = 'Picker popup closed before selection completed.'
+    console.log('[PhotoPickerModal] stopped polling because popup was closed')
     return
   }
 
@@ -229,7 +271,9 @@ async function checkPickerStatus() {
       }
     )
 
+    console.log('[PhotoPickerModal] picker status response', data)
     if (!data.done) {
+      console.log('[PhotoPickerModal] picker not complete yet', { selectedCount: data.selectedCount })
       return
     }
 
@@ -239,6 +283,7 @@ async function checkPickerStatus() {
     polling.value = false
     stopStatusPolling()
 
+    console.log('[PhotoPickerModal] picker complete, items selected', { selectedCount: selectedCount.value })
     emit('items-selected', files)
     closeModal()
   } catch (err) {
@@ -249,11 +294,12 @@ async function checkPickerStatus() {
       err.response?.data?.error ||
       err.message ||
       'Failed to poll Google Photos Picker status'
-    console.error('Picker status error:', error.value)
+    console.error('[PhotoPickerModal] Picker status error:', error.value, err)
   }
 }
 
 function retry() {
+  console.log('[PhotoPickerModal] retry()')
   cleanupPicker()
   error.value = null
   pickerUri.value = null
@@ -263,14 +309,17 @@ function retry() {
 }
 
 function cleanupPicker() {
+  console.log('[PhotoPickerModal] cleanupPicker()')
   stopStatusPolling()
   if (popupWindow.value && !popupWindow.value.closed) {
     popupWindow.value.close()
+    console.log('[PhotoPickerModal] closed popup window')
   }
   popupWindow.value = null
 }
 
 function closeModal() {
+  console.log('[PhotoPickerModal] closeModal()')
   isOpen.value = false
   cleanupPicker()
   pickerUri.value = null
