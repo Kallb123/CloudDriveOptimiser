@@ -144,6 +144,7 @@ async function mapPhotoMediaItem(mediaItem, accessToken) {
     mimeType,
     createdTime: mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
     modifiedTime: mediaItem.updateTime || mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
+    // TODO: This thumbnail link needs routing through the backend to avoid exposing the access token in the URL
     thumbnailLink: baseUrl ? `${baseUrl}=w200-h200` : null,
     webViewLink: baseUrl || mediaItem.productUrl || null,
     mediaItem,

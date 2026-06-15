@@ -34,9 +34,58 @@
           <th>Type</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody v-if="optimisableFiles.length > 0">
+        <tr class="section-heading">
+          <td :colspan="showThumbnails ? 7 : 6">Optimisable videos</td>
+        </tr>
         <tr
-          v-for="file in files"
+          v-for="file in optimisableFiles"
+          :key="file.id"
+          :class="{ selected: selectedIds.includes(file.id), 'video-row': file.isVideo }"
+        >
+          <td>
+            <input
+              type="checkbox"
+              :value="file.id"
+              v-model="selectedIds"
+              :disabled="!file.optimisable"
+              :title="checkboxTitle(file)"
+            />
+          </td>
+          <td v-if="showThumbnails" class="thumb-cell">
+            <img
+              v-if="file.source === 'photos' && file.thumbnailLink"
+              :src="file.thumbnailLink"
+              :alt="file.name"
+              class="thumbnail"
+              loading="lazy"
+            />
+            <img
+              v-else-if="file.source !== 'photos' && file.thumbnailLink"
+              :src="`/api/drive/thumbnail/${file.id}`"
+              :alt="file.name"
+              class="thumbnail"
+              loading="lazy"
+            />
+            <span v-else class="no-thumb">—</span>
+          </td>
+          <td class="name-cell">
+            <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
+              {{ file.name }}
+            </a>
+          </td>
+          <td class="size-cell">{{ formatSize(file.size) }}</td>
+          <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
+          <td class="source-cell">{{ sourceLabel(file.source) }}</td>
+          <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
+        </tr>
+      </tbody>
+      <tbody v-if="otherFiles.length > 0">
+        <tr class="section-heading">
+          <td :colspan="showThumbnails ? 7 : 6">Other files</td>
+        </tr>
+        <tr
+          v-for="file in otherFiles"
           :key="file.id"
           :class="{ selected: selectedIds.includes(file.id), 'video-row': file.isVideo }"
         >
@@ -102,7 +151,16 @@ const emit = defineEmits(['optimise', 'refresh', 'load-more'])
 const showThumbnails = ref(false)
 const selectedIds = ref([])
 
-const videoFiles = computed(() => props.files.filter((f) => f.optimisable))
+const optimisableFiles = computed(() =>
+  props.files
+    .filter((f) => f.optimisable)
+    .sort((a, b) => b.size - a.size)
+)
+const otherFiles = computed(() =>
+  props.files
+    .filter((f) => !f.optimisable)
+    .sort((a, b) => b.size - a.size)
+)
 const selectedItems = computed(() =>
   props.files
     .filter((file) => selectedIds.value.includes(file.id))
@@ -115,7 +173,7 @@ const selectedItems = computed(() =>
     })
 )
 const allSelected = computed(
-  () => videoFiles.value.length > 0 && videoFiles.value.every((f) => selectedIds.value.includes(f.id))
+  () => optimisableFiles.value.length > 0 && optimisableFiles.value.every((f) => selectedIds.value.includes(f.id))
 )
 
 watch(
@@ -129,7 +187,7 @@ watch(
 
 function toggleAll(e) {
   if (e.target.checked) {
-    selectedIds.value = videoFiles.value.map((f) => f.id)
+    selectedIds.value = optimisableFiles.value.map((f) => f.id)
   } else {
     selectedIds.value = []
   }
