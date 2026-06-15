@@ -70,7 +70,9 @@
           @load-more="loadMore"
         />
 
-        <JobStatus ref="jobStatusAnchor" :jobs="jobList" />
+        <div ref="jobStatusAnchor">
+          <JobStatus :jobs="jobList" />
+        </div>
       </div>
 
       <!-- Photo Picker Modal -->
@@ -254,6 +256,7 @@ async function startOptimise(items) {
       jobStatusAnchor.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   } catch (err) {
+    console.error('Failed to start optimisation', err)
     error.value = err.response?.data?.error || 'Failed to start optimisation'
     optimising.value = false
   }
