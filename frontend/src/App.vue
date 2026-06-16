@@ -55,6 +55,12 @@
               Select Videos
             </button>
           </div>
+          <div class="upload-toggle">
+            <label class="toggle">
+              <input type="checkbox" v-model="uploadAfterOptimise" />
+              Upload optimised copy after transcoding
+            </label>
+          </div>
         </div>
 
         <div v-if="error" class="alert alert-error">{{ error }}</div>
@@ -107,6 +113,7 @@ const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
+const uploadAfterOptimise = ref(true)
 const authError = ref(false)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
@@ -366,11 +373,11 @@ async function startOptimise(items) {
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
-      { items },
+      { items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })) },
       { withCredentials: true }
     )
     // Seed job list entries
-    const newJobs = data.jobs.map(({ jobId, fileId, source }) => ({
+    const newJobs = data.jobs.map(({ jobId, fileId, source, upload }) => ({
       jobId,
       fileId,
       source,
@@ -378,6 +385,7 @@ async function startOptimise(items) {
       progress: 0,
       error: null,
       fileName: null,
+      upload,
     }))
     jobList.value = [...jobList.value, ...newJobs]
     startPolling()
