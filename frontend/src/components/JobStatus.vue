@@ -1,7 +1,12 @@
 <!-- JobStatus.vue — shows in-progress / completed optimisation jobs -->
 <template>
   <div class="job-status" v-if="jobs.length > 0">
-    <h3>Optimisation Jobs</h3>
+    <div class="status-header">
+      <h3>Optimisation Jobs</h3>
+      <button class="btn btn-sm btn-secondary clear-button" @click="$emit('clear')">
+        Clear history
+      </button>
+    </div>
     <table class="table">
       <thead>
         <tr>
@@ -139,6 +144,27 @@ function destinationLabel(destination) {
   margin-bottom: 0.75rem;
   font-size: 1.1rem;
   color: #2d3748;
+}
+
+.status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.clear-button {
+  border: 1px solid #cbd5e0;
+  background: white;
+  color: #2d3748;
+  padding: 0.45rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.clear-button:hover {
+  background: #edf2f7;
 }
 
 .completed-uploads {

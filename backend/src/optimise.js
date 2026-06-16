@@ -471,6 +471,19 @@ router.post('/start', requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/optimise/clear
+ * Clears the stored optimisation job list for the authenticated session.
+ */
+router.post('/clear', requireAuth, async (req, res) => {
+  console.log(`${LOG_PREFIX} clear requested for session jobs`, {
+    sessionId: req.sessionID,
+    userId: req.session?.user?.id,
+  });
+  await jobStore.clearSessionJobs(req.sessionID);
+  return res.json({ success: true });
+});
+
+/**
  * GET /api/optimise/status/:jobId
  * Returns the current status of an optimisation job.
  */

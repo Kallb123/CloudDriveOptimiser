@@ -57,10 +57,16 @@ async function touchSessionJobs(sessionId) {
   await redisClient.expire(sessionJobsKey(sessionId), JOB_TTL_SECONDS);
 }
 
+async function clearSessionJobs(sessionId) {
+  if (!sessionId) return;
+  await redisClient.del(sessionJobsKey(sessionId));
+}
+
 module.exports = {
   saveJob,
   loadJob,
   loadSessionJobs,
   saveJobWithSession,
   touchSessionJobs,
+  clearSessionJobs,
 };

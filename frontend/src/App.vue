@@ -71,7 +71,7 @@
         />
 
         <div ref="jobStatusAnchor">
-          <JobStatus :jobs="jobList" />
+          <JobStatus :jobs="jobList" @clear="clearOptimisationHistory" />
         </div>
       </div>
 
@@ -303,6 +303,19 @@ function stopPolling() {
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
+  }
+}
+
+async function clearOptimisationHistory() {
+  error.value = null
+  stopPolling()
+  try {
+    await axios.post('/api/optimise/clear', {}, { withCredentials: true })
+    jobList.value = []
+    optimising.value = false
+  } catch (err) {
+    console.error('Failed to clear optimisation history', err)
+    error.value = err.response?.data?.error || 'Failed to clear optimisation history'
   }
 }
 
