@@ -113,15 +113,31 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
       .run();
   });
 
-  console.log(`${LOG_PREFIX} Cloning and preserving metadata tags (GPS, timestamp, location)...`);
+  console.log(`${LOG_PREFIX} Cloning base metadata...`);
 
-  const exifTags = { Rotation: 0 };
+  // STEP 1: Copy everything from the source file first
+  await exiftool.write(outputPath, {}, [
+    '-overwrite_original',
+    '-tagsFromFile', inputPath,
+    '-All:All'
+  ]);
+  
+  // STEP 2: Apply explicit overrides with the UTC API flag enabled
+  const exifTags = { 
+    SourceFile: inputPath,
+    Rotation: 0 
+  };
   if (metadata.captureTimestamp) {
     exifTags.CreateDate = metadata.captureTimestamp;
     exifTags.ModifyDate = metadata.captureTimestamp;
     exifTags.TrackCreateDate = metadata.captureTimestamp;
     exifTags.MediaCreateDate = metadata.captureTimestamp;
     exifTags.DateTimeOriginal = metadata.captureTimestamp;
+    exifTags['Keys:CreationDate'] = metadata.captureTimestamp,
+    exifTags['QuickTime:CreateDate'] = metadata.captureTimestamp,
+    exifTags['QuickTime:ModifyDate'] = metadata.captureTimestamp,
+    exifTags['QuickTime:TrackCreateDate'] = metadata.captureTimestamp,
+    exifTags['QuickTime:MediaCreateDate'] = metadata.captureTimestamp
   }
 
   if (metadata.location?.latitude != null && metadata.location?.longitude != null) {
@@ -142,11 +158,12 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
       }
     }
   }
+  
+  console.log(`${LOG_PREFIX} Injecting metadata into output file:`, JSON.stringify(exifTags, null, 2));
 
   await exiftool.write(outputPath, exifTags, [
     '-overwrite_original',
-    '-tagsFromFile', inputPath,
-    '-All:All'
+    '-api', 'QuickTimeUTC=1' // CRUCIAL: Forces valid UTC encoding for Google Photos
   ]);
 
   if (metadata.captureTimestamp) {
