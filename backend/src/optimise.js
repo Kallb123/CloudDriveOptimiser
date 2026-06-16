@@ -96,6 +96,7 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
     `-preset ${VIDEO_PRESET}`,
     '-c:a aac',
     '-b:a 128k',
+    '-f mov',
     // Force the output container to recognize custom metadata tags
     '-movflags use_metadata_tags'
   ];
@@ -598,7 +599,7 @@ router.get('/download-all', requireAuth, async (req, res) => {
   archive.pipe(res);
   readyJobs.forEach((job) => {
     archive.file(job.tempOutputPath, {
-      name: job.newFileName || `${job.jobId}.mp4`,
+      name: job.newFileName || `${job.jobId}.mov`,
     });
   });
   await archive.finalize();
@@ -612,7 +613,7 @@ async function processJob(jobId, item, tokens) {
   const { fileId, source } = item;
   const tmpDir = os.tmpdir();
   const inputPath = path.join(tmpDir, `cdo_input_${jobId}`);
-  const outputPath = path.join(tmpDir, `cdo_output_${jobId}.mp4`);
+  const outputPath = path.join(tmpDir, `cdo_output_${jobId}.mov`);
 
   job.tempOutputPath = outputPath;
   job.downloadAvailable = false;
@@ -709,7 +710,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
   if (job.upload) {
     job.status = 'uploading';
-    const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/mp4', meta.parents);
+    const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/quicktime', meta.parents);
 
     job.status = 'deleting_original';
     console.log(`${LOG_PREFIX} deleting original Drive file`, { jobId: job.jobId, fileId });
@@ -811,7 +812,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
       tokens,
       outputPath,
       optimisedName,
-      'video/mp4',
+      'video/quicktime',
       mediaItem.description || undefined
     );
     await jobStore.saveJob(job);
@@ -836,12 +837,12 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
 
 /**
  * Derive a new filename for the re-encoded video.
- * e.g. "holiday.mov" → "holiday_720p.mp4"
+ * e.g. "holiday.mov" → "holiday_720p.mov"
  */
 function buildOptimisedName(originalName, height) {
   const ext = path.extname(originalName);
   const base = path.basename(originalName, ext);
-  return `${base}_${height}p.mp4`;
+  return `${base}_${height}p.mov`;
 }
 
 module.exports = router;

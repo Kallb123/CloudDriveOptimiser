@@ -106,7 +106,7 @@ function buildDownloadLink(blob, filename) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = filename || 'optimised-video.mp4'
+  link.download = filename || 'optimised-video.mov'
   document.body.appendChild(link)
   link.click()
   link.remove()
@@ -119,7 +119,7 @@ async function downloadJob(jobId, filename) {
       responseType: 'blob',
       withCredentials: true,
     })
-    buildDownloadLink(response.data, filename || `job-${jobId}.mp4`)
+    buildDownloadLink(response.data, filename || `job-${jobId}.mov`)
   } catch (err) {
     console.error('Failed to download job', err)
     alert('Unable to download this file. Please try again.')
