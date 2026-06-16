@@ -312,8 +312,14 @@ router.get('/photo-thumbnail/:mediaItemId', requireAuth, async (req, res) => {
     res.setHeader('Content-Type', imgResponse.headers['content-type'] || 'image/jpeg');
     imgResponse.data.pipe(res);
   } catch (err) {
-    console.error('Photo thumbnail proxy error:', err.response?.status, err.message);
-    return res.status(500).json({ error: 'Failed to fetch photo thumbnail' });
+    const statusCode = err.response?.status || 500;
+    const apiError = err.message || err.response?.data || 'Failed to fetch photo thumbnail';
+    console.error('Photo thumbnail proxy error:', statusCode, apiError);
+    return res.status(statusCode).json({
+      error: 'Failed to fetch photo thumbnail',
+      status: statusCode,
+      details: apiError,
+    });
   }
 });
 

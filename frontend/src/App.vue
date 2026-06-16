@@ -113,6 +113,7 @@ const photoPickerRef = ref(null)
 const jobStatusAnchor = ref(null)
 
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
+const PHOTO_PICKER_STORAGE_TTL_MS = 60 * 60 * 1000 // 60 minutes
 
 let pollTimer = null
 let pollingActive = false
@@ -128,10 +129,28 @@ function loadPersistedPhotoFiles() {
   try {
     const raw = localStorage.getItem(getPhotoStorageKey())
     if (!raw) return []
+
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed
+    const photoFiles = Array.isArray(parsed.items)
+      ? parsed.items
+      : Array.isArray(parsed)
+      ? parsed
+      : []
+    const savedAt = typeof parsed.savedAt === 'number' ? parsed.savedAt : Date.now()
+
+    if (!Array.isArray(photoFiles)) {
+      clearPersistedPhotoFiles()
+      return []
+    }
+
+    if (Date.now() - savedAt > PHOTO_PICKER_STORAGE_TTL_MS) {
+      clearPersistedPhotoFiles()
+      return []
+    }
+
+    return photoFiles
   } catch {
+    clearPersistedPhotoFiles()
     return []
   }
 }
@@ -139,7 +158,118 @@ function loadPersistedPhotoFiles() {
 function savePersistedPhotoFiles() {
   if (!user.value?.id) return
   const photoFiles = files.value.filter((file) => file.source === 'photos')
-  localStorage.setItem(getPhotoStorageKey(), JSON.stringify(photoFiles))
+  const payload = {
+    savedAt: Date.now(),
+    items: photoFiles,
+  }
+  localStorage.setItem(getPhotoStorageKey(), JSON.stringify(payload))
+}
+
+function clearPersistedPhotoFiles() {
+  if (user.value?.id) {
+    localStorage.removeItem(getPhotoStorageKey())
+  }
+}
+
+function isPersistedPhotoThumbnailAccessible(photo) {
+  const url = photo.thumbnailLink || photo.baseUrl
+  if (!url) return true
+
+  return fetch(url, {
+    method: 'GET',
+    cache: 'no-store',
+    mode: 'cors',
+  })
+    .then((response) => {
+      return response.status !== 401 && response.status !== 403
+    })
+    .catch(() => true)
+}
+
+function removePersistedPhotoById(photoId) {
+  if (!user.value?.id || !photoId) return false
+
+  const raw = localStorage.getItem(getPhotoStorageKey())
+  if (!raw) return false
+
+  try {
+    const parsed = JSON.parse(raw)
+    const items = Array.isArray(parsed.items)
+      ? parsed.items
+      : Array.isArray(parsed)
+      ? parsed
+      : []
+
+    const filtered = items.filter((file) => {
+      if (!file) return true
+      if (file.id === photoId) return false
+      if (file.mediaItem?.id === photoId) return false
+      return true
+    })
+
+    if (filtered.length === items.length) return false
+
+    if (filtered.length === 0) {
+      localStorage.removeItem(getPhotoStorageKey())
+    } else {
+      localStorage.setItem(
+        getPhotoStorageKey(),
+        JSON.stringify({ savedAt: parsed.savedAt || Date.now(), items: filtered })
+      )
+    }
+
+    files.value = files.value.filter(
+      (file) => !(file.source === 'photos' && (file.id === photoId || file.mediaItem?.id === photoId))
+    )
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isAuthorisationError(err) {
+  const status = err?.response?.status
+  const message = String(err?.response?.data?.error || err?.message || '').toLowerCase()
+  return (
+    status === 401 || status === 403 ||
+    /auth|authorisation|authorization|expired|permission/.test(message)
+  )
+}
+
+function isAuthorisationErrorString(message) {
+  if (!message) return false
+  return /auth|authorisation|authorization|expired|permission/.test(String(message).toLowerCase())
+}
+
+async function validatePersistedPhotos(photoFiles) {
+  if (!Array.isArray(photoFiles) || photoFiles.length === 0) return
+
+  await Promise.all(
+    photoFiles.map(async (file) => {
+      const photoId = file.id || file.mediaItem?.id
+      if (!photoId) return
+
+      const accessible = await isPersistedPhotoThumbnailAccessible(file)
+      if (!accessible) {
+        removePersistedPhotoById(photoId)
+      }
+    })
+  )
+}
+
+function handlePersistedPhotoJobErrors(jobList) {
+  if (!Array.isArray(jobList)) return
+
+  for (const job of jobList) {
+    if (
+      job.source === 'photos' &&
+      job.status === 'error' &&
+      isAuthorisationErrorString(job.error)
+    ) {
+      removePersistedPhotoById(job.fileId)
+    }
+  }
 }
 
 function mergeFiles(driveFiles, photoFiles) {
@@ -168,7 +298,7 @@ async function checkAuth() {
 
 async function logout() {
   await axios.post('/auth/logout', {}, { withCredentials: true })
-  localStorage.removeItem(getPhotoStorageKey())
+  clearPersistedPhotoFiles()
   authenticated.value = false
   user.value = null
   files.value = []
@@ -188,6 +318,7 @@ async function analyseFiles() {
     const { data } = await axios.get('/api/drive/files', { withCredentials: true })
     const persistedPhotos = loadPersistedPhotoFiles()
     files.value = mergeFiles(data.files, persistedPhotos)
+    await validatePersistedPhotos(persistedPhotos)
     nextPageToken.value = data.nextPageToken
   } catch (err) {
     error.value = err.response?.data?.error || 'Failed to fetch files'
@@ -267,6 +398,7 @@ async function pollJobs() {
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
+    handlePersistedPhotoJobErrors(jobList.value)
     optimising.value = jobList.value.some(
       (j) => j.status !== 'complete' && j.status !== 'error'
     )
@@ -325,6 +457,7 @@ async function hydrateJobs() {
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
+    handlePersistedPhotoJobErrors(jobList.value)
     optimising.value = jobList.value.some(
       (j) => j.status !== 'complete' && j.status !== 'error'
     )
@@ -347,6 +480,7 @@ onMounted(async () => {
     const persistedPhotos = loadPersistedPhotoFiles()
     if (persistedPhotos.length > 0) {
       files.value = mergeFiles([], persistedPhotos)
+      await validatePersistedPhotos(persistedPhotos)
     }
     await hydrateJobs()
     await analyseFiles()
