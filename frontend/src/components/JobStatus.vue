@@ -40,7 +40,17 @@
         Remove the original Google Photos videos manually to recover storage space.
       </div>
 
-      <h3>Optimised Uploads</h3>
+      <div class="completed-header">
+        <h3>Optimised Uploads</h3>
+        <button
+          class="btn btn-sm btn-primary download-all-button"
+          :disabled="!completedJobs.length"
+          @click="downloadAll"
+        >
+          Download All
+        </button>
+      </div>
+
       <table class="table">
         <thead>
           <tr>
@@ -50,6 +60,7 @@
             <th>New size</th>
             <th>Capture time</th>
             <th>Uploaded to</th>
+            <th>Download</th>
           </tr>
         </thead>
         <tbody>
@@ -60,6 +71,14 @@
             <td>{{ formatSize(job.newSize) }}</td>
             <td>{{ formatDateTime(job.captureTimestamp) }}</td>
             <td>{{ destinationLabel(job.uploadedTo) }}</td>
+            <td>
+              <button
+                class="btn btn-sm btn-secondary download-button"
+                @click="downloadJob(job.jobId, job.newFileName)"
+              >
+                Download
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -69,18 +88,56 @@
 
 <script setup>
 import { computed } from 'vue'
+import axios from 'axios'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
 })
 
 const completedJobs = computed(() =>
-  props.jobs.filter((job) => job.status === 'complete' && (job.newFileName || job.newFileId))
+  props.jobs.filter((job) => job.status === 'complete' && job.downloadAvailable && (job.newFileName || job.newFileId))
 )
 
 const photosCleanupRequired = computed(() =>
   completedJobs.value.some((job) => job.manualCleanupRequired)
 )
+
+function buildDownloadLink(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || 'optimised-video.mov'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function downloadJob(jobId, filename) {
+  try {
+    const response = await axios.get(`/api/optimise/download/${encodeURIComponent(jobId)}`, {
+      responseType: 'blob',
+      withCredentials: true,
+    })
+    buildDownloadLink(response.data, filename || `job-${jobId}.mov`)
+  } catch (err) {
+    console.error('Failed to download job', err)
+    alert('Unable to download this file. Please try again.')
+  }
+}
+
+async function downloadAll() {
+  try {
+    const response = await axios.get('/api/optimise/download-all', {
+      responseType: 'blob',
+      withCredentials: true,
+    })
+    buildDownloadLink(response.data, 'cdo-optimised-videos.zip')
+  } catch (err) {
+    console.error('Failed to download all jobs', err)
+    alert('Unable to download all files. Please try again.')
+  }
+}
 
 const STATUS_LABELS = {
   queued: 'Queued',
@@ -99,9 +156,13 @@ function statusLabel(status) {
 
 function statusDetail(job) {
   if (job.status === 'complete') {
-    return job.manualCleanupRequired
-      ? `✓ Uploaded "${job.newFileName}" to Google Photos`
-      : `✓ Saved as "${job.newFileName}"`
+    if (job.manualCleanupRequired) {
+      return `✓ Uploaded "${job.newFileName}" to Google Photos`
+    }
+    if (job.upload === false) {
+      return `✓ Optimised copy ready for download as "${job.newFileName}"`
+    }
+    return `✓ Saved as "${job.newFileName}"`
   }
   if (job.status === 'downloading') {
     return job.source === 'photos' ? 'Downloading from Google Photos…' : 'Downloading from Drive…'
@@ -179,6 +240,39 @@ function destinationLabel(destination) {
   border: 1px solid #f6e05e;
   color: #744210;
   font-size: 0.9rem;
+}
+
+.completed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.download-button,
+.download-all-button {
+  border: 1px solid #cbd5e0;
+  background: white;
+  color: #2d3748;
+  padding: 0.35rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.download-all-button {
+  background: #3182ce;
+  color: white;
+  border-color: #2c5282;
+}
+
+.download-button:hover,
+.download-all-button:hover {
+  background: #edf2f7;
+}
+
+.download-all-button:hover {
+  background: #2b6cb0;
 }
 
 .table {

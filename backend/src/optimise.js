@@ -7,6 +7,7 @@ const path = require('path');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const ffmpeg = require('fluent-ffmpeg');
+const { ZipArchive } = require('archiver');
 const { exiftool } = require('exiftool-vendored');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { getDriveClient, requireAuth } = require('./drive');
@@ -23,6 +24,18 @@ const PHOTOS_API_BASE_URL = 'https://photoslibrary.googleapis.com/v1';
 const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
 const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
 const LOG_PREFIX = '[optimise]';
+
+function sanitizeJob(job) {
+  if (!job) return null;
+  const { tempOutputPath, ...sanitized } = job;
+  return sanitized;
+}
+
+async function loadSessionJobById(sessionId, jobId) {
+  const job = await jobStore.loadJob(jobId);
+  if (!job || job.sessionId !== sessionId) return null;
+  return job;
+}
 
 /**
  * Download a Drive file to a temp path.
@@ -83,6 +96,7 @@ async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, o
     `-preset ${VIDEO_PRESET}`,
     '-c:a aac',
     '-b:a 128k',
+    '-f mov',
     // Force the output container to recognize custom metadata tags
     '-movflags use_metadata_tags'
   ];
@@ -441,12 +455,14 @@ router.post('/start', requireAuth, async (req, res) => {
     const jobId = uuidv4();
     const fileId = item.id || item.mediaItem?.id;
     const source = item.source || 'drive';
+    const upload = item.upload !== false;
     const job = {
       jobId,
       sessionId: req.sessionID,
       fileId,
       item,
       source,
+      upload,
       status: 'queued',
       progress: 0,
       error: null,
@@ -467,7 +483,7 @@ router.post('/start', requireAuth, async (req, res) => {
     });
   });
 
-  return res.json({ jobs: queuedJobs.map(({ jobId, fileId, source }) => ({ jobId, fileId, source })) });
+  return res.json({ jobs: queuedJobs.map(({ jobId, fileId, source, upload }) => ({ jobId, fileId, source, upload })) });
 });
 
 /**
@@ -479,6 +495,18 @@ router.post('/clear', requireAuth, async (req, res) => {
     sessionId: req.sessionID,
     userId: req.session?.user?.id,
   });
+  const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
+  for (const job of sessionJobs) {
+    if (job?.tempOutputPath) {
+      try {
+        fs.unlinkSync(job.tempOutputPath);
+      } catch (err) {
+        if (err.code !== 'ENOENT') {
+          console.warn(`${LOG_PREFIX} failed to remove temp output file during clear`, { path: job.tempOutputPath, error: err.message });
+        }
+      }
+    }
+  }
   await jobStore.clearSessionJobs(req.sessionID);
   return res.json({ success: true });
 });
@@ -503,7 +531,7 @@ router.get('/status/:jobId', requireAuth, async (req, res) => {
     });
     return res.status(404).json({ error: 'Job not found' });
   }
-  return res.json(job);
+  return res.json(sanitizeJob(job));
 });
 
 /**
@@ -515,7 +543,66 @@ router.get('/status', requireAuth, async (req, res) => {
     sessionId: req.sessionID,
   });
   const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
-  return res.json({ jobs: sessionJobs });
+  return res.json({ jobs: sessionJobs.map(sanitizeJob) });
+});
+
+router.get('/download/:jobId', requireAuth, async (req, res) => {
+  console.log(`${LOG_PREFIX} download requested for job`, {
+    sessionId: req.sessionID,
+    jobId: req.params.jobId,
+  });
+
+  const job = await loadSessionJobById(req.sessionID, req.params.jobId);
+  if (!job || job.status !== 'complete' || !job.tempOutputPath) {
+    return res.status(404).json({ error: 'Download not available' });
+  }
+
+  if (!fs.existsSync(job.tempOutputPath)) {
+    return res.status(404).json({ error: 'Optimised file not found' });
+  }
+
+  return res.download(job.tempOutputPath, job.newFileName || path.basename(job.tempOutputPath), (err) => {
+    if (err) {
+      console.error(`${LOG_PREFIX} download failed`, { jobId: req.params.jobId, error: err.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download file' });
+      }
+    }
+  });
+});
+
+router.get('/download-all', requireAuth, async (req, res) => {
+  console.log(`${LOG_PREFIX} download-all requested`, {
+    sessionId: req.sessionID,
+  });
+
+  const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
+  const readyJobs = sessionJobs.filter(
+    (job) => job.status === 'complete' && job.tempOutputPath && fs.existsSync(job.tempOutputPath)
+  );
+
+  if (readyJobs.length === 0) {
+    return res.status(404).json({ error: 'No completed downloads available' });
+  }
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="cdo-optimised-videos.zip"');
+  const archive = new ZipArchive({
+    zlib: { level: 9 }, // Sets the compression level.
+  });
+  archive.on('error', (err) => {
+    console.error(`${LOG_PREFIX} download-all archive error`, { error: err.message });
+    if (!res.headersSent) {
+      res.status(500).end();
+    }
+  });
+  archive.pipe(res);
+  readyJobs.forEach((job) => {
+    archive.file(job.tempOutputPath, {
+      name: job.newFileName || `${job.jobId}.mov`,
+    });
+  });
+  await archive.finalize();
 });
 
 /**
@@ -526,7 +613,10 @@ async function processJob(jobId, item, tokens) {
   const { fileId, source } = item;
   const tmpDir = os.tmpdir();
   const inputPath = path.join(tmpDir, `cdo_input_${jobId}`);
-  const outputPath = path.join(tmpDir, `cdo_output_${jobId}.mp4`);
+  const outputPath = path.join(tmpDir, `cdo_output_${jobId}.mov`);
+
+  job.tempOutputPath = outputPath;
+  job.downloadAvailable = false;
 
   console.log(`${LOG_PREFIX} starting job`, { jobId, fileId, source, tmpDir });
   try {
@@ -546,10 +636,22 @@ async function processJob(jobId, item, tokens) {
     await jobStore.saveJob(job).catch((err) => {
       console.error(`${LOG_PREFIX} failed to persist job state`, { jobId, error: err.message });
     });
-    // Clean up temp files
-    for (const p of [inputPath, outputPath]) {
-      try { fs.unlinkSync(p); } catch (cleanupErr) {
-        console.warn(`${LOG_PREFIX} failed to delete temp file`, { path: p, error: cleanupErr.message });
+
+    try {
+      fs.unlinkSync(inputPath);
+    } catch (cleanupErr) {
+      if (cleanupErr.code !== 'ENOENT') {
+        console.warn(`${LOG_PREFIX} failed to delete temp input file`, { path: inputPath, error: cleanupErr.message });
+      }
+    }
+
+    if (job.status !== 'complete') {
+      try {
+        fs.unlinkSync(outputPath);
+      } catch (cleanupErr) {
+        if (cleanupErr.code !== 'ENOENT') {
+          console.warn(`${LOG_PREFIX} failed to delete temp output file`, { path: outputPath, error: cleanupErr.message });
+        }
       }
     }
   }
@@ -605,20 +707,31 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     isPortrait: driveOrientationIsPortrait,
   });
 
-  job.status = 'uploading';
   const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
-  const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/mp4', meta.parents);
+  if (job.upload) {
+    job.status = 'uploading';
+    const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/quicktime', meta.parents);
 
-  job.status = 'deleting_original';
-  console.log(`${LOG_PREFIX} deleting original Drive file`, { jobId: job.jobId, fileId });
-  await drive.files.delete({ fileId });
-  console.log(`${LOG_PREFIX} original Drive file deleted`, { jobId: job.jobId, fileId });
+    job.status = 'deleting_original';
+    console.log(`${LOG_PREFIX} deleting original Drive file`, { jobId: job.jobId, fileId });
+    await drive.files.delete({ fileId });
+    console.log(`${LOG_PREFIX} original Drive file deleted`, { jobId: job.jobId, fileId });
 
-  job.status = 'complete';
-  job.newFileId = uploaded.id;
-  job.newFileName = uploaded.name;
-  job.uploadedTo = 'drive';
-  job.manualCleanupRequired = false;
+    job.status = 'complete';
+    job.newFileId = uploaded.id;
+    job.newFileName = uploaded.name;
+    job.uploadedTo = 'drive';
+    job.manualCleanupRequired = false;
+    job.downloadAvailable = true;
+    await jobStore.saveJob(job);
+  } else {
+    job.status = 'complete';
+    job.newFileName = optimisedName;
+    job.uploadedTo = 'local';
+    job.manualCleanupRequired = false;
+    job.downloadAvailable = true;
+    await jobStore.saveJob(job);
+  }
 }
 
 async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
@@ -690,35 +803,46 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     isPortrait: photosOrientationIsPortrait,
   });
 
-  job.status = 'uploading';
-  await jobStore.saveJob(job);
   const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
-  const uploaded = await uploadPhotoVideo(
-    tokens,
-    outputPath,
-    optimisedName,
-    'video/mp4',
-    mediaItem.description || undefined
-  );
-  await jobStore.saveJob(job);
-  console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
 
-  job.status = 'complete';
-  job.newFileId = uploaded.id;
-  job.newFileName = uploaded.filename || optimisedName;
-  job.uploadedTo = 'photos';
-  job.manualCleanupRequired = true;
-  await jobStore.saveJob(job);
+  if (job.upload) {
+    job.status = 'uploading';
+    await jobStore.saveJob(job);
+    const uploaded = await uploadPhotoVideo(
+      tokens,
+      outputPath,
+      optimisedName,
+      'video/quicktime',
+      mediaItem.description || undefined
+    );
+    await jobStore.saveJob(job);
+    console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
+
+    job.status = 'complete';
+    job.newFileId = uploaded.id;
+    job.newFileName = uploaded.filename || optimisedName;
+    job.uploadedTo = 'photos';
+    job.manualCleanupRequired = true;
+    job.downloadAvailable = true;
+    await jobStore.saveJob(job);
+  } else {
+    job.status = 'complete';
+    job.newFileName = optimisedName;
+    job.uploadedTo = 'local';
+    job.manualCleanupRequired = false;
+    job.downloadAvailable = true;
+    await jobStore.saveJob(job);
+  }
 }
 
 /**
  * Derive a new filename for the re-encoded video.
- * e.g. "holiday.mov" → "holiday_720p.mp4"
+ * e.g. "holiday.mov" → "holiday_720p.mov"
  */
 function buildOptimisedName(originalName, height) {
   const ext = path.extname(originalName);
   const base = path.basename(originalName, ext);
-  return `${base}_${height}p.mp4`;
+  return `${base}_${height}p.mov`;
 }
 
 module.exports = router;

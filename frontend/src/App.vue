@@ -55,6 +55,19 @@
               Select Videos
             </button>
           </div>
+          <div class="upload-toggle">
+            <label class="toggle">
+              <input type="checkbox" v-model="uploadAfterOptimise" />
+              Upload optimised copy after transcoding
+            </label>
+          </div>
+        </div>
+
+        <div v-if="notices.length" class="notice-list">
+          <div v-for="(notice, index) in notices" :key="notice.id" class="alert alert-info alert-dismissible">
+            <span>{{ notice.message }}</span>
+            <button class="alert-close" @click="dismissNotice(index)" aria-label="Dismiss notice">×</button>
+          </div>
         </div>
 
         <div v-if="error" class="alert alert-error">{{ error }}</div>
@@ -107,7 +120,26 @@ const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
+const uploadAfterOptimise = ref(true)
 const authError = ref(false)
+const notices = ref([
+  {
+    id: 'location-loss',
+    message: 'Location data will be lost as Google Photos strips it before the download.',
+  },
+  {
+    id: 'quality-loss',
+    message: 'Video quality will be reduced during the optimisation process.',
+  },
+  {
+    id: 'mov-conversion',
+    message: 'Videos will be converted to MOV containers to preserve the most metadata possible.',
+  },
+  {
+    id: 'account-storage',
+    message: 'The optimised videos will take up space on your Google account.',
+  },
+])
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 const jobStatusAnchor = ref(null)
@@ -242,6 +274,10 @@ function isAuthorisationErrorString(message) {
   return /auth|authorisation|authorization|expired|permission/.test(String(message).toLowerCase())
 }
 
+function dismissNotice(index) {
+  notices.value.splice(index, 1)
+}
+
 async function validatePersistedPhotos(photoFiles) {
   if (!Array.isArray(photoFiles) || photoFiles.length === 0) return
 
@@ -366,11 +402,11 @@ async function startOptimise(items) {
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
-      { items },
+      { items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })) },
       { withCredentials: true }
     )
     // Seed job list entries
-    const newJobs = data.jobs.map(({ jobId, fileId, source }) => ({
+    const newJobs = data.jobs.map(({ jobId, fileId, source, upload }) => ({
       jobId,
       fileId,
       source,
@@ -378,6 +414,7 @@ async function startOptimise(items) {
       progress: 0,
       error: null,
       fileName: null,
+      upload,
     }))
     jobList.value = [...jobList.value, ...newJobs]
     startPolling()
@@ -635,12 +672,44 @@ body {
   border-radius: 8px;
   margin-bottom: 1rem;
   font-size: 0.9rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.alert-info {
+  background: #ebf8ff;
+  color: #2a4365;
+  border: 1px solid #bee3f8;
 }
 
 .alert-error {
   background: #fff5f5;
   color: #c53030;
   border: 1px solid #fed7d7;
+}
+
+.alert-dismissible {
+  position: relative;
+  padding-right: 2.5rem;
+}
+
+.alert-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  position: absolute;
+  top: 0.75rem;
+  right: 0.9rem;
+  padding: 0;
+}
+
+.alert-close:hover {
+  opacity: 0.75;
 }
 
 /* Buttons */
