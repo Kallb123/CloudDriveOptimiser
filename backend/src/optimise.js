@@ -25,6 +25,17 @@ const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
 const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
 const LOG_PREFIX = '[optimise]';
 
+const photosUploadMutex = {
+  current: Promise.resolve(),
+};
+
+async function enqueuePhotosUpload(task) {
+  const next = photosUploadMutex.current.then(() => task());
+  // Keep the chain alive even if a task fails so subsequent uploads still run.
+  photosUploadMutex.current = next.catch(() => {});
+  return next;
+}
+
 function sanitizeJob(job) {
   if (!job) return null;
   const { tempOutputPath, ...sanitized } = job;
@@ -808,13 +819,13 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   if (job.upload) {
     job.status = 'uploading';
     await jobStore.saveJob(job);
-    const uploaded = await uploadPhotoVideo(
+    const uploaded = await enqueuePhotosUpload(() => uploadPhotoVideo(
       tokens,
       outputPath,
       optimisedName,
       'video/quicktime',
       mediaItem.description || undefined
-    );
+    ));
     await jobStore.saveJob(job);
     console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
 
