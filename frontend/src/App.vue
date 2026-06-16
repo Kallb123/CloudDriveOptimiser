@@ -63,6 +63,13 @@
           </div>
         </div>
 
+        <div v-if="notices.length" class="notice-list">
+          <div v-for="(notice, index) in notices" :key="notice.id" class="alert alert-info alert-dismissible">
+            <span>{{ notice.message }}</span>
+            <button class="alert-close" @click="dismissNotice(index)" aria-label="Dismiss notice">×</button>
+          </div>
+        </div>
+
         <div v-if="error" class="alert alert-error">{{ error }}</div>
 
         <FileList
@@ -115,6 +122,24 @@ const nextPageToken = ref(null)
 const jobList = ref([])
 const uploadAfterOptimise = ref(true)
 const authError = ref(false)
+const notices = ref([
+  {
+    id: 'location-loss',
+    message: 'Location data will be lost as Google Photos strips it before the download.',
+  },
+  {
+    id: 'quality-loss',
+    message: 'Video quality will be reduced during the optimisation process.',
+  },
+  {
+    id: 'mov-conversion',
+    message: 'Videos will be converted to MOV containers to preserve the most metadata possible.',
+  },
+  {
+    id: 'account-storage',
+    message: 'The optimised videos will take up space on your Google account.',
+  },
+])
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 const jobStatusAnchor = ref(null)
@@ -247,6 +272,10 @@ function isAuthorisationError(err) {
 function isAuthorisationErrorString(message) {
   if (!message) return false
   return /auth|authorisation|authorization|expired|permission/.test(String(message).toLowerCase())
+}
+
+function dismissNotice(index) {
+  notices.value.splice(index, 1)
 }
 
 async function validatePersistedPhotos(photoFiles) {
@@ -643,12 +672,44 @@ body {
   border-radius: 8px;
   margin-bottom: 1rem;
   font-size: 0.9rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.alert-info {
+  background: #ebf8ff;
+  color: #2a4365;
+  border: 1px solid #bee3f8;
 }
 
 .alert-error {
   background: #fff5f5;
   color: #c53030;
   border: 1px solid #fed7d7;
+}
+
+.alert-dismissible {
+  position: relative;
+  padding-right: 2.5rem;
+}
+
+.alert-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  position: absolute;
+  top: 0.75rem;
+  right: 0.9rem;
+  padding: 0;
+}
+
+.alert-close:hover {
+  opacity: 0.75;
 }
 
 /* Buttons */
