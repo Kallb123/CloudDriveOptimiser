@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const axios = require('axios');
 const { google } = require('googleapis');
 const path = require('path');
 const redisClient = require('./redis-client');
@@ -22,12 +23,21 @@ function createOAuthClient() {
   );
 }
 
-async function getOrCreatePhotosAlbum(tokens, userId) {
+async function getPhotosAccessToken(tokens) {
   const authClient = createOAuthClient();
   authClient.setCredentials(tokens);
-  const photos = google.photoslibrary({ version: 'v1', auth: authClient });
-  const redisKey = `photos_album:${userId}`;
+  const accessTokenResponse = await authClient.getAccessToken();
+  const accessToken = accessTokenResponse?.token || accessTokenResponse;
 
+  if (!accessToken) {
+    throw new Error('Unable to obtain a valid Google access token for Photos API requests.');
+  }
+
+  return accessToken;
+}
+
+async function getOrCreatePhotosAlbum(tokens, userId) {
+  const redisKey = `photos_album:${userId}`;
   const existingAlbumId = await redisClient.get(redisKey);
   if (existingAlbumId) {
     console.log(`[auth] found existing photos album ID in Redis for user ${userId}: ${existingAlbumId}`);
@@ -35,15 +45,20 @@ async function getOrCreatePhotosAlbum(tokens, userId) {
   }
 
   console.log(`[auth] no existing photos album found in Redis for user ${userId}, creating one`);
-  const response = await photos.albums.create({
-    requestBody: {
-      album: {
-        title: 'Cloud Drive Optimiser',
-      },
-    },
-  });
+  const accessToken = await getPhotosAccessToken(tokens);
 
-  const albumId = response.data.id;
+  const response = await axios.post(
+    'https://photoslibrary.googleapis.com/v1/albums',
+    { album: { title: 'Cloud Drive Optimiser' } },
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  const albumId = response.data?.id;
   if (!albumId) {
     throw new Error('Failed to create Google Photos album');
   }
