@@ -357,7 +357,7 @@ async function downloadPhotoVideo(tokens, mediaItem, destPath) {
   });
 }
 
-async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) {
+async function uploadPhotoVideo(tokens, localPath, name, mimeType, description, albumId) {
   const headers = await getPhotosRequestHeaders(tokens);
   const uploadSize = getFileSize(localPath);
 
@@ -395,6 +395,7 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description) 
     const { data } = await axios.post(
       `${PHOTOS_MEDIA_ITEMS_URL}:batchCreate`,
       {
+        albumId: albumId, // Upload to the user's optimiser album
         newMediaItems: [
           {
             ...(description ? { description } : {}),
@@ -453,6 +454,14 @@ router.post('/start', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'items must be a non-empty array' });
   }
 
+  const albumId = req.session.photosAlbumId || null;
+  if (!albumId) {
+    console.warn(`${LOG_PREFIX} missing photos album ID in session`, {
+      sessionId: req.sessionID,
+      userId: req.session?.user?.id,
+    });
+  }
+
   if (items.some((item) => {
     const hasId = Boolean(item?.id || item?.mediaItem?.id);
     return !hasId || (item.source && !['drive', 'photos'].includes(item.source));
@@ -471,6 +480,7 @@ router.post('/start', requireAuth, async (req, res) => {
       jobId,
       sessionId: req.sessionID,
       fileId,
+      albumId,
       item,
       source,
       upload,
@@ -824,7 +834,8 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
       outputPath,
       optimisedName,
       'video/quicktime',
-      mediaItem.description || undefined
+      mediaItem.description || undefined,
+      job.albumId || null
     ));
     await jobStore.saveJob(job);
     console.log(`${LOG_PREFIX} uploaded transcoded file to Photos`, { jobId: job.jobId, newMediaItemId: uploaded.id });
