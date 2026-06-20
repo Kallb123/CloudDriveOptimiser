@@ -1,7 +1,6 @@
 'use strict';
 
 const express = require('express');
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -11,7 +10,11 @@ const { ZipArchive } = require('archiver');
 const { exiftool } = require('exiftool-vendored');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { getDriveClient, requireAuth } = require('./drive');
-const { createOAuthClient } = require('./auth');
+const {
+  getPhotoMediaItem,
+  downloadPhotoVideo,
+  uploadPhotoVideo,
+} = require('./photos-api');
 const jobStore = require('./job-store');
 
 const router = express.Router();
@@ -19,10 +22,7 @@ const jobs = {};
 
 const TARGET_HEIGHT = parseInt(process.env.TRANSCODE_HEIGHT || '720', 10);
 const VIDEO_CRF = parseInt(process.env.TRANSCODE_CRF || '28', 10);
-const VIDEO_PRESET = process.env.TRANSCODE_PRESET || 'medium';
-const PHOTOS_API_BASE_URL = 'https://photoslibrary.googleapis.com/v1';
-const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
-const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
+const VIDEO_PRESET = process.env.VIDEO_PRESET || 'medium';
 const LOG_PREFIX = '[optimise]';
 
 const photosUploadMutex = {
@@ -226,25 +226,6 @@ async function uploadFile(drive, localPath, name, mimeType, parents) {
   return data;
 }
 
-function getPhotosAuthClient(tokens) {
-  const authClient = createOAuthClient();
-  authClient.setCredentials(tokens);
-  return authClient;
-}
-
-async function getPhotosRequestHeaders(tokens) {
-  const authClient = getPhotosAuthClient(tokens);
-  const accessTokenResponse = await authClient.getAccessToken();
-  const accessToken = accessTokenResponse?.token || accessTokenResponse;
-
-  if (!accessToken) {
-    throw new Error('Unable to obtain a valid Google access token for Photos API requests. Please re-authenticate.');
-  }
-
-  return {
-    Authorization: `Bearer ${accessToken}`,
-  };
-}
 
 function getFileSize(filePath) {
   try {
@@ -319,111 +300,6 @@ function getApiErrorMessage(err, fallbackMessage) {
   const genericMessage =
     typeof err.response?.data === 'string' ? err.response.data : err.response?.data?.error;
   return photosMessage || genericMessage || err.message || fallbackMessage;
-}
-
-async function getPhotoMediaItem(tokens, mediaItemId) {
-  const headers = await getPhotosRequestHeaders(tokens);
-
-  try {
-    const { data } = await axios.get(`${PHOTOS_MEDIA_ITEMS_URL}/${encodeURIComponent(mediaItemId)}`, {
-      headers,
-    });
-    return data;
-  } catch (err) {
-    throw new Error(getApiErrorMessage(err, `Failed to fetch Google Photos media item ${mediaItemId}`));
-  }
-}
-
-async function downloadPhotoVideo(tokens, mediaItem, destPath) {
-  if (!mediaItem.baseUrl) {
-    throw new Error(
-      `Google Photos item "${mediaItem.filename || mediaItem.id}" is missing a download URL. The item may not be fully processed yet or may be inaccessible.`
-    );
-  }
-
-  const headers = await getPhotosRequestHeaders(tokens);
-  const dest = fs.createWriteStream(destPath);
-  const response = await axios.get(`${mediaItem.baseUrl}=dv`, {
-    headers,
-    responseType: 'stream',
-  });
-
-  return new Promise((resolve, reject) => {
-    response.data
-      .on('error', reject)
-      .pipe(dest)
-      .on('error', reject)
-      .on('finish', resolve);
-  });
-}
-
-async function uploadPhotoVideo(tokens, localPath, name, mimeType, description, albumId) {
-  const headers = await getPhotosRequestHeaders(tokens);
-  const uploadSize = getFileSize(localPath);
-
-  let uploadToken;
-  try {
-    console.log(`${LOG_PREFIX} uploading ${localPath} to Google Photos as ${name}`);
-    console.log(`${LOG_PREFIX} upload size: ${uploadSize} bytes, mimeType: ${mimeType}`);
-    const uploadResponse = await axios.post(PHOTOS_UPLOAD_URL, fs.createReadStream(localPath), {
-      headers: {
-        ...headers,
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': uploadSize,
-        'X-Goog-Upload-Protocol': 'raw',
-        'X-Goog-Upload-Content-Type': mimeType,
-      },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      responseType: 'text',
-      transformResponse: [(data) => data],
-    });
-
-    uploadToken = String(uploadResponse.data || '').trim();
-    console.log(`${LOG_PREFIX} received upload token from Google Photos:`, uploadToken);
-  } catch (err) {
-    throw new Error(getApiErrorMessage(err, 'Failed to upload optimised video bytes to Google Photos'));
-  }
-
-  if (!uploadToken) {
-    throw new Error(
-      'Google Photos upload did not return an upload token. This may indicate an API quota limit, authentication issue, or service unavailability.'
-    );
-  }
-
-  try {
-    const { data } = await axios.post(
-      `${PHOTOS_MEDIA_ITEMS_URL}:batchCreate`,
-      {
-        albumId: albumId, // Upload to the user's optimiser album
-        newMediaItems: [
-          {
-            ...(description ? { description } : {}),
-            simpleMediaItem: {
-              uploadToken,
-              fileName: name,
-            },
-          },
-        ],
-      },
-      {
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const result = data.newMediaItemResults?.[0];
-    const statusCode = result?.status?.code || 0;
-    if (!result || statusCode !== 0 || !result.mediaItem?.id) {
-      throw new Error(result?.status?.message || 'Google Photos did not create the uploaded media item');
-    }
-
-    return result.mediaItem;
-  } catch (err) {
-    throw new Error(getApiErrorMessage(err, 'Failed to create Google Photos media item'));
-  }
 }
 
 /**

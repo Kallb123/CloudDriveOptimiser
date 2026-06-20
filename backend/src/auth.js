@@ -4,6 +4,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const path = require('path');
 const redisClient = require('./redis-client');
+const { getOrCreatePhotosAlbum } = require('./photos-api');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const router = express.Router();
@@ -20,38 +21,6 @@ function createOAuthClient() {
     GOOGLE_CLIENT_SECRET,
     REDIRECT_URI
   );
-}
-
-async function getOrCreatePhotosAlbum(tokens, userId) {
-  const authClient = createOAuthClient();
-  authClient.setCredentials(tokens);
-  const photos = google.photoslibrary({ version: 'v1', auth: authClient });
-  const redisKey = `photos_album:${userId}`;
-
-  const existingAlbumId = await redisClient.get(redisKey);
-  if (existingAlbumId) {
-    console.log(`[auth] found existing photos album ID in Redis for user ${userId}: ${existingAlbumId}`);
-    return existingAlbumId;
-  }
-
-  console.log(`[auth] no existing photos album found in Redis for user ${userId}, creating one`);
-  const response = await photos.albums.create({
-    requestBody: {
-      album: {
-        title: 'Cloud Drive Optimiser',
-      },
-    },
-  });
-
-  const albumId = response.data.id;
-  if (!albumId) {
-    throw new Error('Failed to create Google Photos album');
-  }
-
-  await redisClient.set(redisKey, albumId);
-  console.log(`[auth] created new photos album ${albumId} and stored it in Redis for user ${userId}`);
-
-  return albumId;
 }
 
 // GET /auth/google — redirect user to Google consent screen
@@ -99,7 +68,7 @@ router.get('/google/callback', async (req, res) => {
     };
 
     try {
-      const albumId = await getOrCreatePhotosAlbum(tokens, profile.id);
+      const albumId = await getOrCreatePhotosAlbum(tokens, profile.id, redisClient);
       req.session.photosAlbumId = albumId;
       console.log(`[auth] photos album ID saved to session for user ${profile.id}: ${albumId}`);
     } catch (albumErr) {
@@ -131,7 +100,7 @@ router.get('/status', async (req, res) => {
   if (req.session && req.session.user) {
     if (!req.session.photosAlbumId && req.session.tokens && req.session.user.id) {
       try {
-        const albumId = await getOrCreatePhotosAlbum(req.session.tokens, req.session.user.id);
+        const albumId = await getOrCreatePhotosAlbum(req.session.tokens, req.session.user.id, redisClient);
         req.session.photosAlbumId = albumId;
         await new Promise((resolve, reject) => {
           req.session.save((saveErr) => {
