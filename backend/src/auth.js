@@ -3,6 +3,7 @@
 const express = require('express');
 const { google } = require('googleapis');
 const path = require('path');
+const redisClient = require('./redis-client');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const router = express.Router();
@@ -19,6 +20,38 @@ function createOAuthClient() {
     GOOGLE_CLIENT_SECRET,
     REDIRECT_URI
   );
+}
+
+async function getOrCreatePhotosAlbum(tokens, userId) {
+  const authClient = createOAuthClient();
+  authClient.setCredentials(tokens);
+  const photos = google.photoslibrary({ version: 'v1', auth: authClient });
+  const redisKey = `photos_album:${userId}`;
+
+  const existingAlbumId = await redisClient.get(redisKey);
+  if (existingAlbumId) {
+    console.log(`[auth] found existing photos album ID in Redis for user ${userId}: ${existingAlbumId}`);
+    return existingAlbumId;
+  }
+
+  console.log(`[auth] no existing photos album found in Redis for user ${userId}, creating one`);
+  const response = await photos.albums.create({
+    requestBody: {
+      album: {
+        title: 'Cloud Drive Optimiser',
+      },
+    },
+  });
+
+  const albumId = response.data.id;
+  if (!albumId) {
+    throw new Error('Failed to create Google Photos album');
+  }
+
+  await redisClient.set(redisKey, albumId);
+  console.log(`[auth] created new photos album ${albumId} and stored it in Redis for user ${userId}`);
+
+  return albumId;
 }
 
 // GET /auth/google — redirect user to Google consent screen
@@ -65,6 +98,15 @@ router.get('/google/callback', async (req, res) => {
       picture: profile.picture,
     };
 
+    try {
+      const albumId = await getOrCreatePhotosAlbum(tokens, profile.id);
+      req.session.photosAlbumId = albumId;
+      console.log(`[auth] photos album ID saved to session for user ${profile.id}: ${albumId}`);
+    } catch (albumErr) {
+      console.error('[auth] failed to retrieve or create photos album:', albumErr.message);
+      // Continue without blocking auth: session still valid, album can be created later.
+    }
+
     console.log('User authenticated:', req.session.user);
     console.log('Session ID on callback:', req.sessionID);
 
@@ -82,12 +124,30 @@ router.get('/google/callback', async (req, res) => {
 });
 
 // GET /auth/status — return current session user or 401
-router.get('/status', (req, res) => {
+router.get('/status', async (req, res) => {
   console.log('Session ID on status:', req.sessionID);
   console.log('Session status check:', req.session.user ? 'Authenticated' : 'Not authenticated');
+
   if (req.session && req.session.user) {
+    if (!req.session.photosAlbumId && req.session.tokens && req.session.user.id) {
+      try {
+        const albumId = await getOrCreatePhotosAlbum(req.session.tokens, req.session.user.id);
+        req.session.photosAlbumId = albumId;
+        await new Promise((resolve, reject) => {
+          req.session.save((saveErr) => {
+            if (saveErr) return reject(saveErr);
+            resolve();
+          });
+        });
+        console.log(`[auth] photos album ID saved to session on status route for user ${req.session.user.id}: ${albumId}`);
+      } catch (albumErr) {
+        console.error('[auth] failed to fetch or create photos album on status:', albumErr.message);
+      }
+    }
+
     return res.json({ authenticated: true, user: req.session.user });
   }
+
   console.log('User not authenticated, returning 401', req.session);
   return res.status(401).json({ authenticated: false });
 });
