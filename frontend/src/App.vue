@@ -12,7 +12,7 @@
       <div class="user-area" v-if="user">
         <img v-if="user.picture" :src="user.picture" :alt="user.name" class="avatar" />
         <span class="user-name">{{ user.name }}</span>
-        <button class="btn btn-sm btn-secondary" @click="logout">Sign out</button>
+        <button class="btn btn-sm btn-header" @click="logout">Sign out</button>
       </div>
     </header>
 
@@ -52,11 +52,11 @@
               class="btn btn-primary"
               @click="openPhotoPicker"
             >
-              Select Videos
+              Google Photos Picker
             </button>
           </div>
-          <div class="upload-toggle">
-            <label class="toggle">
+          <div>
+            <label class="toggle btn btn-secondary">
               <input type="checkbox" v-model="uploadAfterOptimise" />
               Upload optimised copy after transcoding
             </label>
@@ -747,13 +747,18 @@ body {
 }
 
 .btn-secondary {
-  background: rgba(255,255,255,0.2);
-  color: white;
-  border: 1px solid rgba(255,255,255,0.3);
+  background: #e2e8f0;
+  color: #2d3748;
 }
 
-.btn-secondary:not(:disabled):hover {
-  background: rgba(255,255,255,0.3);
+.btn-header {
+  background: rgba(255,255,255,0.1);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+.btn-header:not(:disabled):hover {
+  background: rgba(255,255,255,0.2);
 }
 
 /* ── Footer ── */

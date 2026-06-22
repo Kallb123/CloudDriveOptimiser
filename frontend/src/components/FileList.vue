@@ -2,12 +2,12 @@
 <template>
   <div class="file-list">
     <div class="toolbar">
-      <label class="toggle">
+      <label class="toggle btn btn-secondary">
         <input type="checkbox" v-model="showThumbnails" />
         Show thumbnails
       </label>
-      <label class="filter">
-        <span>Filter filename</span>
+      <label style="margin-right: 0.5rem">
+        <span style="margin-right: 0.2rem;">Filter filename: </span>
         <input
           type="text"
           v-model="filenameFilter"
@@ -20,9 +20,6 @@
         @click="$emit('optimise', selectedItems)"
       >
         Optimise selected ({{ selectedItems.length }})
-      </button>
-      <button class="btn btn-secondary" @click="$emit('refresh')">
-        Refresh
       </button>
     </div>
 
