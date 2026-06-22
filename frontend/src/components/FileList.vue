@@ -36,7 +36,7 @@
           <th><input type="checkbox" @change="toggleAll" :checked="allSelected" /></th>
           <th v-if="showThumbnails">Thumbnail</th>
           <th>Name</th>
-          <th>Size</th>
+          <th>Size ▼</th>
           <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
