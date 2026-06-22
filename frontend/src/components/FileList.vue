@@ -2,9 +2,17 @@
 <template>
   <div class="file-list">
     <div class="toolbar">
-      <label class="toggle">
+      <label class="toggle btn btn-secondary">
         <input type="checkbox" v-model="showThumbnails" />
         Show thumbnails
+      </label>
+      <label style="margin-right: 0.5rem">
+        <span style="margin-right: 0.2rem;">Filter filename: </span>
+        <input
+          type="text"
+          v-model="filenameFilter"
+          placeholder="Filter by filename"
+        />
       </label>
       <button
         class="btn btn-primary"
@@ -12,9 +20,6 @@
         @click="$emit('optimise', selectedItems)"
       >
         Optimise selected ({{ selectedItems.length }})
-      </button>
-      <button class="btn btn-secondary" @click="$emit('refresh')">
-        Refresh
       </button>
     </div>
 
@@ -28,7 +33,7 @@
           <th><input type="checkbox" @change="toggleAll" :checked="allSelected" /></th>
           <th v-if="showThumbnails">Thumbnail</th>
           <th>Name</th>
-          <th>Size</th>
+          <th>Size ▼</th>
           <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
@@ -152,15 +157,22 @@ const props = defineProps({
 const emit = defineEmits(['optimise', 'refresh', 'load-more'])
 
 const showThumbnails = ref(false)
+const filenameFilter = ref('')
 const selectedIds = ref([])
 
+const filteredFiles = computed(() => {
+  const query = filenameFilter.value.trim().toLowerCase()
+  if (!query) return props.files
+  return props.files.filter((file) => file.name?.toLowerCase().includes(query))
+})
+
 const optimisableFiles = computed(() =>
-  props.files
+  filteredFiles.value
     .filter((f) => f.optimisable)
     .sort((a, b) => b.size - a.size)
 )
 const otherFiles = computed(() =>
-  props.files
+  filteredFiles.value
     .filter((f) => !f.optimisable)
     .sort((a, b) => b.size - a.size)
 )
