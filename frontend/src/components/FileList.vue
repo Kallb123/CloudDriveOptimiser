@@ -6,6 +6,14 @@
         <input type="checkbox" v-model="showThumbnails" />
         Show thumbnails
       </label>
+      <label class="filter">
+        <span>Filter filename</span>
+        <input
+          type="text"
+          v-model="filenameFilter"
+          placeholder="Filter by filename"
+        />
+      </label>
       <button
         class="btn btn-primary"
         :disabled="selectedItems.length === 0 || optimising"
@@ -152,15 +160,22 @@ const props = defineProps({
 const emit = defineEmits(['optimise', 'refresh', 'load-more'])
 
 const showThumbnails = ref(false)
+const filenameFilter = ref('')
 const selectedIds = ref([])
 
+const filteredFiles = computed(() => {
+  const query = filenameFilter.value.trim().toLowerCase()
+  if (!query) return props.files
+  return props.files.filter((file) => file.name?.toLowerCase().includes(query))
+})
+
 const optimisableFiles = computed(() =>
-  props.files
+  filteredFiles.value
     .filter((f) => f.optimisable)
     .sort((a, b) => b.size - a.size)
 )
 const otherFiles = computed(() =>
-  props.files
+  filteredFiles.value
     .filter((f) => !f.optimisable)
     .sort((a, b) => b.size - a.size)
 )
