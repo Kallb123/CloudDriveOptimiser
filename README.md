@@ -1,8 +1,16 @@
 # CloudDriveOptimiser
 
-A web application that lets you analyse your Google Drive and Google Photos library to identify the largest files and videos, view them with thumbnails, and optimise selectable videos by re-encoding them at a lower resolution — all without leaving your browser.
+A web application that lets you analyse your Google Drive and Google Photos library to identify the largest files and videos, view them with thumbnails, and optimise videos by re-encoding them at a lower resolution — all without leaving your browser.
 
----
+The motivation for this was:
+![Screenshot of storage full warning 1](/docs/storage-full-1.png)
+![Screenshot of storage full warning 2](/docs/storage-full-2.png)
+
+Often, large videos have used up storage before features such as "storage saver" were implemented.
+Those original quality videos can be reduced in size massively whilst still being watchable, for example:
+![Screenshot of application results](/docs/optimiser.png)
+
+If quality is a concern, take a backup of the originals elsewhere before optimising the videos.
 
 ## Features
 
@@ -10,12 +18,10 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 - **Drive analysis** — lists your largest Drive items sorted by size, with file name, upload date, and size
 - **Google Photos Picker** — select specific videos from your Google Photos library using the official Google Photos Picker API
 - **Thumbnails** — optional thumbnail view for images and videos
-- **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720 p (configurable) using FFmpeg
+- **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720p (configurable) using FFmpeg
 - **Job tracking** — real-time progress display for each transcoding job
 - **Upload summary** — completed optimisations list the original file size, new file size, capture timestamp, and filenames
 - **Pagination** — load more files on demand
-
----
 
 ## Architecture
 
@@ -41,8 +47,6 @@ A web application that lets you analyse your Google Drive and Google Photos libr
 
 Both services are orchestrated with Docker Compose.
 
----
-
 ## Prerequisites
 
 | Tool | Minimum version |
@@ -52,8 +56,6 @@ Both services are orchestrated with Docker Compose.
 | A Google Cloud project | — |
 
 > **Local development only** (without Docker): Node.js ≥ 20 and FFmpeg must be installed on your machine.
-
----
 
 ## Google Cloud Setup
 
@@ -99,8 +101,6 @@ Inside your project navigate to **APIs & Services → Library** and enable:
 4. Click **Create**.
 5. Copy the **Client ID** and **Client Secret** — you will need them in the next step.
 
----
-
 ## Configuration
 
 ### 1 — Create the `.env` file
@@ -124,8 +124,6 @@ Open `.env` and fill in the values:
 | `TRANSCODE_CRF` | FFmpeg CRF quality (default `28`; lower = higher quality) |
 | `TRANSCODE_PRESET` | FFmpeg encoding preset (default `medium`) |
 
----
-
 ## Running with Docker Compose
 
 ```bash
@@ -143,8 +141,6 @@ docker compose down
 ```
 
 Once running, open [http://localhost:80](http://localhost:80) in your browser.
-
----
 
 ## Local Development (without Docker)
 
@@ -179,8 +175,6 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 > **Note**: When running locally, set `BACKEND_URL=http://localhost:3000` and `FRONTEND_URL=http://localhost:5173` in your `.env`.
 > If you run the frontend through Vite proxy, you can also set `OAUTH_REDIRECT_URI=http://localhost:5173/auth/google/callback` so the OAuth callback stays on the same origin as the browser.
 
----
-
 ## Usage
 
 1. Open the application in your browser.
@@ -195,11 +189,10 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
    - Embedded metadata is copied onto the optimised MP4.
    - Drive videos are uploaded back to the same folder in Drive and the original is deleted automatically.
    - Google Photos videos are uploaded back into Google Photos as new items.
+   Google Photos items will be stored in an album created for this app, making it easier to locate them.
 8. The **Optimisation Jobs** panel shows real-time progress for each file.
 9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
 10. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
-
----
 
 ## Project Structure
 
@@ -230,8 +223,6 @@ CloudDriveOptimiser/
 └── README.md
 ```
 
----
-
 ## Security Notes
 
 - Session cookies are `httpOnly` and `secure` in production (`NODE_ENV=production`).
@@ -239,8 +230,6 @@ CloudDriveOptimiser/
 - Drive thumbnails are proxied through the backend, avoiding token leakage in browser requests.
 - The `.env` file is excluded from version control via `.gitignore`. **Never commit credentials.**
 - In production, place the application behind a reverse proxy with TLS and update `BACKEND_URL` / `FRONTEND_URL` accordingly.
-
----
 
 ## Troubleshooting
 
