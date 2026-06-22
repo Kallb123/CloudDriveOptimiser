@@ -402,7 +402,6 @@ async function fetchPickerResult(sessionId, accessToken) {
     console.log('Photos Picker getResult response', {
       sessionResource,
       status: response.status,
-      data: response.data,
     });
     return response.data;
   } catch (err) {
@@ -428,7 +427,7 @@ async function fetchPickerResult(sessionId, accessToken) {
 router.post('/picker/status', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
-    console.log('Picker status request body', { body: req.body });
+    console.log('Picker status');
 
     if (!sessionId) {
       console.error('Picker status missing sessionId in request body');
@@ -439,13 +438,13 @@ router.post('/picker/status', requireAuth, async (req, res) => {
     const { token: accessToken } = await oAuth2Client.getAccessToken();
     const resultData = await fetchPickerResult(sessionId, accessToken);
 
-    console.log('Picker status result data', {
-      sessionId,
-      mediaItemsSet: resultData.mediaItemsSet,
-      mediaItemsLength: Array.isArray(resultData.mediaItems) ? resultData.mediaItems.length : 'not-array',
-      resultDataKeys: Object.keys(resultData || {}),
-      rawData: resultData,
-    });
+    // console.log('Picker status result data', {
+    //   sessionId,
+    //   mediaItemsSet: resultData.mediaItemsSet,
+    //   mediaItemsLength: Array.isArray(resultData.mediaItems) ? resultData.mediaItems.length : 'not-array',
+    //   resultDataKeys: Object.keys(resultData || {}),
+    //   rawData: resultData,
+    // });
 
     const mediaItemsSet = resultData.mediaItemsSet === true;
     const mediaItems = Array.isArray(resultData.mediaItems) ? resultData.mediaItems : [];
@@ -478,7 +477,7 @@ router.post('/picker/status', requireAuth, async (req, res) => {
 router.post('/picker/get-items', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
-    console.log('Picker get-items request body', { body: req.body });
+    console.log('Picker get-items');
 
     if (!sessionId) {
       console.error('Picker get-items missing sessionId in request body');
@@ -509,16 +508,15 @@ router.post('/picker/get-items', requireAuth, async (req, res) => {
 
     console.log('Photos Picker get-items response', {
       sessionResource,
-      status: response.status,
-      data: response.data,
+      status: response.status
     });
-    console.log('Photos Picker data', JSON.stringify(response.data, null, 2));
+    // console.log('Photos Picker data', JSON.stringify(response.data, null, 2));
 
     const { mediaItems = [] } = response.data;
 
     const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken, req.session)));
 
-    console.log('Photos Picker mapped data:', JSON.stringify(mappedItems, null, 2));
+    // console.log('Photos Picker mapped data:', JSON.stringify(mappedItems, null, 2));
 
     console.log('Photos Picker items retrieved:', mappedItems.length);
     return res.json({ files: mappedItems });
