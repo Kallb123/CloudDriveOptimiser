@@ -6,6 +6,9 @@ const JOB_TTL_SECONDS = 24 * 60 * 60;
 const ACTIVE_JOBS_KEY = 'jobs:active';
 const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error']);
 const INTERRUPTED_MESSAGE = 'Interrupted by a server restart — please try again';
+const LATE_STAGE_STATUSES = new Set(['uploading', 'trashing_original']);
+const INTERRUPTED_LATE_MESSAGE =
+  'Interrupted by a server restart while uploading — check Drive / Google Photos for an existing optimised copy (and the Drive bin for the original) before retrying';
 
 function jobKey(jobId) {
   return `job:${jobId}`;
@@ -118,8 +121,12 @@ async function recoverInterruptedJobs({ readyTimeoutMs = 15000 } = {}) {
       await redisClient.sRem(ACTIVE_JOBS_KEY, jobId);
       continue;
     }
+    // Past the upload step the optimised copy may already exist (and a Drive
+    // original may already be in the bin), so a blind retry could duplicate it.
+    job.error = LATE_STAGE_STATUSES.has(job.status)
+      ? INTERRUPTED_LATE_MESSAGE
+      : INTERRUPTED_MESSAGE;
     job.status = 'error';
-    job.error = INTERRUPTED_MESSAGE;
     job.downloadAvailable = false;
     delete job.tempOutputPath;
     await saveJob(job); // terminal status => removed from the active set
