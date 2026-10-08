@@ -12,6 +12,8 @@ const REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || `${BACKEND_URL}/auth/goog
 const PHOTOS_API_BASE_URL = 'https://photoslibrary.googleapis.com/v1';
 const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
 const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
+const PHOTOS_LINK_EXPIRED_MESSAGE =
+  'Google Photos download link has expired — re-select this video with the Google Photos picker and run it again';
 
 function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -150,11 +152,21 @@ async function downloadPhotoVideo(tokens, mediaItem, destPath, signal) {
 
   if (signal?.aborted) throw createAbortError();
   const headers = await getPhotosRequestHeaders(tokens);
-  const response = await axios.get(`${mediaItem.baseUrl}=dv`, {
-    headers,
-    responseType: 'stream',
-    signal,
-  });
+  let response;
+  try {
+    response = await axios.get(`${mediaItem.baseUrl}=dv`, {
+      headers,
+      responseType: 'stream',
+      signal,
+    });
+  } catch (err) {
+    // Picker baseUrls expire after about an hour; abort/cancel errors have no
+    // response so they pass through untouched.
+    if ([400, 401, 403, 404].includes(err.response?.status)) {
+      throw new Error(PHOTOS_LINK_EXPIRED_MESSAGE);
+    }
+    throw err;
+  }
 
   return new Promise((resolve, reject) => {
     const dest = require('fs').createWriteStream(destPath);
@@ -247,7 +259,9 @@ async function uploadPhotoVideo(tokens, localPath, name, mimeType, description, 
 }
 
 module.exports = {
+  PHOTOS_LINK_EXPIRED_MESSAGE,
   getOrCreatePhotosAlbum,
+  backfillPhotosAlbumUrl,
   getCachedPhotosAlbumUrl,
   getPhotosRequestHeaders,
   getPhotoMediaItem,

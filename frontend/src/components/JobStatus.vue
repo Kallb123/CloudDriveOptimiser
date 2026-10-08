@@ -125,7 +125,7 @@
                   type="checkbox"
                   :checked="!!job.originalRemovedByUser"
                   :disabled="isPending(job)"
-                  @change="$emit('cleanup', { jobId: job.jobId, removed: $event.target.checked })"
+                  @change="$emit('cleanup', { jobId: job.jobId, removed: $event.target.checked, input: $event.target })"
                 />
                 <span>Removed</span>
               </label>

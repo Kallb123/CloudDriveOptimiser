@@ -133,6 +133,9 @@ const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
+// Bumped whenever jobList is changed locally (POST results); a status GET that
+// started before the bump is stale and must not overwrite the newer state.
+let jobsVersion = 0
 const photosAlbumUrl = ref(null)
 // jobIds with a cancel/retry/cleanup request in flight (disables their buttons)
 const pendingJobIds = ref(new Set())
@@ -392,6 +395,7 @@ async function logout() {
   files.value = []
   analysed.value = false
   jobList.value = []
+  jobsVersion++
   stopPolling()
 }
 
@@ -496,6 +500,7 @@ async function startOptimise(items, options) {
       upload,
     }))
     jobList.value = [...jobList.value, ...newJobs]
+    jobsVersion++
     startPolling()
 
     await nextTick()
@@ -511,19 +516,24 @@ async function startOptimise(items, options) {
 
 async function pollJobs() {
   if (!pollingActive || jobList.value.length === 0) return
+  const version = jobsVersion
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
-    jobList.value = data.jobs || []
-    photosAlbumUrl.value = data.photosAlbumUrl || null
-    handlePersistedPhotoJobErrors(jobList.value)
-    optimising.value = jobList.value.some((j) => !isJobFinished(j))
+    // A job action landed while this request was in flight: drop the stale
+    // response and let the next poll pick up the current state.
+    if (version === jobsVersion) {
+      jobList.value = data.jobs || []
+      photosAlbumUrl.value = data.photosAlbumUrl || null
+      handlePersistedPhotoJobErrors(jobList.value)
+      optimising.value = jobList.value.some((j) => !isJobFinished(j))
 
-    const allDone = jobList.value.every(isJobFinished)
-    if (allDone) {
-      stopPolling()
-      optimising.value = false
-      if (analysed.value) await analyseFiles()
-      return
+      const allDone = jobList.value.every(isJobFinished)
+      if (allDone) {
+        stopPolling()
+        optimising.value = false
+        if (analysed.value) await analyseFiles()
+        return
+      }
     }
   } catch {
     // Silently ignore poll errors
@@ -565,6 +575,7 @@ async function postJobAction(jobId, action, body = {}) {
     )
     if (!data?.job) return null
     jobList.value = jobList.value.map((j) => (j.jobId === jobId ? { ...j, ...data.job } : j))
+    jobsVersion++
     return data.job
   } catch (err) {
     console.error(`Failed to ${action} job`, err)
@@ -589,8 +600,10 @@ async function retryJob(jobId) {
   if (await postJobAction(jobId, 'retry')) resumePolling()
 }
 
-async function setCleanup({ jobId, removed }) {
-  await postJobAction(jobId, 'cleanup', { removed: !!removed })
+async function setCleanup({ jobId, removed, input }) {
+  const job = await postJobAction(jobId, 'cleanup', { removed: !!removed })
+  // The checkbox is uncontrolled between renders, so undo the tick ourselves.
+  if (!job && input) input.checked = !removed
 }
 
 async function clearOptimisationHistory() {
@@ -599,6 +612,7 @@ async function clearOptimisationHistory() {
   try {
     await axios.post('/api/optimise/clear', {}, { withCredentials: true })
     jobList.value = []
+    jobsVersion++
     optimising.value = false
   } catch (err) {
     console.error('Failed to clear optimisation history', err)
@@ -619,8 +633,14 @@ async function loadConfig() {
 }
 
 async function hydrateJobs() {
+  const version = jobsVersion
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
+    if (version !== jobsVersion) {
+      // Local changes landed meanwhile; keep them and just make sure polling runs.
+      if (jobList.value.some((j) => !isJobFinished(j))) startPolling()
+      return
+    }
     jobList.value = data.jobs || []
     photosAlbumUrl.value = data.photosAlbumUrl || null
     handlePersistedPhotoJobErrors(jobList.value)

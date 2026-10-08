@@ -121,6 +121,19 @@ async function recoverInterruptedJobs({ readyTimeoutMs = 15000 } = {}) {
       await redisClient.sRem(ACTIVE_JOBS_KEY, jobId);
       continue;
     }
+    if (job.cancelRequested) {
+      // The user had already asked to stop it; the restart just finished the job.
+      job.status = 'cancelled';
+      job.error = null;
+      job.interruptedStage = null;
+      job.progress = 0;
+      job.cancelRequested = false;
+      job.downloadAvailable = false;
+      delete job.tempOutputPath;
+      await saveJob(job);
+      recovered.push(job);
+      continue;
+    }
     // Past the upload step the optimised copy may already exist (and a Drive
     // original may already be in the bin), so a blind retry could duplicate it.
     job.error = LATE_STAGE_STATUSES.has(job.status)

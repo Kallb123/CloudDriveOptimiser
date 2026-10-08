@@ -15,6 +15,8 @@ const {
   downloadPhotoVideo,
   uploadPhotoVideo,
   getCachedPhotosAlbumUrl,
+  backfillPhotosAlbumUrl,
+  PHOTOS_LINK_EXPIRED_MESSAGE,
 } = require('./photos-api');
 const redisClient = require('./redis-client');
 const jobStore = require('./job-store');
@@ -93,6 +95,8 @@ function parseJobOptions(rawOptions) {
 // those mid-flight risks duplicate uploads or a half-replaced original.
 const CANCELLABLE_STATUSES = new Set(['queued', 'fetching_metadata', 'downloading', 'transcoding']);
 const RETRYABLE_STATUSES = new Set(['error', 'cancelled']);
+// Picker baseUrls last about 60 minutes; refuse a retry that is certain to 403.
+const PHOTOS_LINK_MAX_AGE_MS = 55 * 60 * 1000;
 
 class JobCancelledError extends Error {
   constructor(message = 'Cancelled') {
@@ -574,6 +578,7 @@ router.post('/start', requireAuth, async (req, res) => {
       targetHeight,
       crf,
       status: 'queued',
+      createdAt: Date.now(),
       progress: 0,
       error: null,
       cancelRequested: false,
@@ -705,9 +710,23 @@ router.get('/status', requireAuth, async (req, res) => {
   });
   const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
   // Cached values only (session, then redis) — never a Google API call per poll.
-  const photosAlbumUrl = req.session?.photosAlbumUrl
+  let photosAlbumUrl = req.session?.photosAlbumUrl
     || await getCachedPhotosAlbumUrl(req.session?.user?.id, redisClient)
     || null;
+  // Sessions that predate the stored album URL: look it up once (best effort).
+  // The flag stops a failed lookup from being retried on every poll.
+  if (!photosAlbumUrl && req.session?.photosAlbumId && !req.session.photosAlbumUrlChecked
+    && sessionJobs.some((job) => job.source === 'photos')) {
+    req.session.photosAlbumUrlChecked = true;
+    try {
+      await backfillPhotosAlbumUrl(req.session.tokens, req.session.user?.id, redisClient, req.session.photosAlbumId);
+      photosAlbumUrl = await getCachedPhotosAlbumUrl(req.session.user?.id, redisClient);
+      if (photosAlbumUrl) req.session.photosAlbumUrl = photosAlbumUrl;
+      await new Promise((resolve, reject) => req.session.save((err) => (err ? reject(err) : resolve())));
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} could not backfill photos album URL`, { error: err.message });
+    }
+  }
   return res.json({ jobs: sessionJobs.map(sanitizeJob), photosAlbumUrl });
 });
 
@@ -765,8 +784,19 @@ router.post('/jobs/:jobId/retry', requireAuth, async (req, res) => {
   if (!job) {
     return res.status(404).json({ error: 'Job not found' });
   }
+  // The redis copy above can be stale: a concurrent retry (e.g. another tab) may
+  // already have re-queued this job. The in-memory copy is authoritative, and
+  // nothing awaits between this check and the jobs[jobId] assignment below, so
+  // a second request is guaranteed to see the queued job.
+  const current = jobs[jobId];
+  if (current && !RETRYABLE_STATUSES.has(current.status)) {
+    return res.status(409).json({ error: `Job cannot be retried while ${current.status}` });
+  }
   if (!RETRYABLE_STATUSES.has(job.status)) {
     return res.status(409).json({ error: `Job cannot be retried while ${job.status}` });
+  }
+  if (job.source === 'photos' && job.createdAt && Date.now() - job.createdAt > PHOTOS_LINK_MAX_AGE_MS) {
+    return res.status(409).json({ error: PHOTOS_LINK_EXPIRED_MESSAGE });
   }
   // The previous run may still be cleaning up its temp files (same paths).
   if (jobControllers.has(jobId)) {
@@ -957,6 +987,11 @@ async function processJob(jobId, item, tokens) {
       await jobStore.saveJob(job);
       console.log(`${LOG_PREFIX} job cancelled`, { jobId });
       return;
+    }
+    // A failure this late may have left an optimised copy behind (or a trashed
+    // original); the UI warns before retrying a job with an interruptedStage.
+    if (job.status === 'uploading' || job.status === 'trashing_original') {
+      job.interruptedStage = job.status;
     }
     job.status = 'error';
     job.error = err.message;
