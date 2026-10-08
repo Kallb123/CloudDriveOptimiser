@@ -31,8 +31,9 @@ export function formatSize(bytes) {
   return `${val.toFixed(1)} ${units[i]}`
 }
 
-export function estimateOptimisedSize(file, { targetHeight, crf } = {}) {
-  if (!file) return null
+export function estimateOptimisedSize(file, settings) {
+  const { targetHeight, crf } = settings || {}
+  if (!file || !positive(file.size)) return null
   const shortSide = positive(file.width) && positive(file.height)
     ? Math.min(file.width, file.height)
     : null
@@ -40,7 +41,7 @@ export function estimateOptimisedSize(file, { targetHeight, crf } = {}) {
   if (!dimsKnown) return null
 
   const outShort = Math.min(targetHeight, shortSide)
-  let estimate = null
+  let estimate
 
   if (positive(file.durationMillis) && Number.isFinite(crf)) {
     const videoKbps =
@@ -49,31 +50,42 @@ export function estimateOptimisedSize(file, { targetHeight, crf } = {}) {
       Math.pow(2, (BASE_CRF - crf) / CRF_STEP_FOR_DOUBLING)
     const seconds = file.durationMillis / 1000
     estimate = (seconds * (videoKbps + AUDIO_KBPS) * 1000) / 8
-  } else if (positive(file.size)) {
-    estimate = file.size * Math.pow(outShort / shortSide, 2) * NO_DURATION_FACTOR
   } else {
-    return null
+    estimate = file.size * Math.pow(outShort / shortSide, 2) * NO_DURATION_FACTOR
   }
 
   // Never estimate growth.
-  if (positive(file.size)) estimate = Math.min(estimate, file.size)
-  return Math.round(estimate)
+  return Math.round(Math.min(estimate, file.size))
+}
+
+// The size we expect to end up with. The backend keeps the original when the
+// optimised copy isn't at least `minSavingPercent` smaller, so a file whose
+// estimated saving is below that threshold keeps its original size.
+function effectiveEstimate(file, settings) {
+  const estimate = estimateOptimisedSize(file, settings)
+  if (estimate === null) return null
+  const minPercent = (settings || {}).minSavingPercent
+  if (positive(minPercent) && file.size - estimate < (file.size * minPercent) / 100) {
+    return file.size
+  }
+  return estimate
 }
 
 export function estimateSaving(file, settings) {
-  const estimate = estimateOptimisedSize(file, settings)
+  const estimate = effectiveEstimate(file, settings)
   if (estimate === null) return null
-  return Math.max(0, (file.size || 0) - estimate)
+  return Math.max(0, file.size - estimate)
 }
 
 export function summariseEstimates(files, settings) {
+  const list = (files || []).filter(Boolean)
   let totalSize = 0
   let estimatedSize = 0
   let unknownCount = 0
-  for (const file of files || []) {
+  for (const file of list) {
     const size = positive(file.size) ? file.size : 0
     totalSize += size
-    const estimate = estimateOptimisedSize(file, settings)
+    const estimate = effectiveEstimate(file, settings)
     if (estimate === null) {
       unknownCount++
       estimatedSize += size
@@ -82,7 +94,7 @@ export function summariseEstimates(files, settings) {
     }
   }
   return {
-    count: (files || []).length,
+    count: list.length,
     totalSize,
     estimatedSize,
     estimatedSaving: Math.max(0, totalSize - estimatedSize),

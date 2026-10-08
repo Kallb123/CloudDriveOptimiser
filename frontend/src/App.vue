@@ -138,10 +138,11 @@ const FALLBACK_CONFIG = {
     { key: 'quality', label: 'Higher quality', crf: 23 },
   ],
 }
-const config = ref({ ...FALLBACK_CONFIG })
+const config = ref({ ...FALLBACK_CONFIG, fromFallback: true })
 const defaultSettings = computed(() => ({
   targetHeight: config.value.targetHeight,
   crf: config.value.crf,
+  minSavingPercent: config.value.minSavingPercent,
 }))
 const confirmModalOpen = ref(false)
 const confirmFiles = ref([])
@@ -436,14 +437,20 @@ function handlePhotosSelected(photoFiles) {
 
 // ---- Optimisation ----
 
-function openConfirm(selectedFiles) {
+async function openConfirm(selectedFiles) {
   if (!Array.isArray(selectedFiles) || selectedFiles.length === 0) return
   error.value = null
+  // If the server config could not be loaded earlier, retry once so the dialog
+  // shows (and sends) the server's real defaults where possible.
+  if (config.value.fromFallback) await loadConfig()
   confirmFiles.value = selectedFiles
   confirmModalOpen.value = true
 }
 
-function handleConfirm(options) {
+function handleConfirm({ targetHeight, crf, changed } = {}) {
+  // With only the fallback defaults and no change by the user, omit `options`
+  // so the server applies its own configured defaults.
+  const options = config.value.fromFallback && !changed ? undefined : { targetHeight, crf }
   const items = confirmFiles.value.map((file) => {
     const item = { id: file.id, source: file.source || 'drive' }
     if (file.source === 'photos' && file.mediaItem) {
@@ -553,7 +560,7 @@ async function loadConfig() {
     config.value = { ...FALLBACK_CONFIG, ...data }
   } catch (err) {
     console.warn('Failed to load optimise config, using defaults', err?.message || err)
-    config.value = { ...FALLBACK_CONFIG }
+    config.value = { ...FALLBACK_CONFIG, fromFallback: true }
   }
 }
 

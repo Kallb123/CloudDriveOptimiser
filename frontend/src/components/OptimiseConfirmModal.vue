@@ -35,7 +35,10 @@
         <section class="summary" title="Rough estimate based on resolution and duration">
           <strong>{{ summary.count }}</strong> {{ summary.count === 1 ? 'video' : 'videos' }}
           · {{ formatSize(summary.totalSize) }} → ~{{ formatSize(summary.estimatedSize) }}
-          · est. saving <strong>~{{ formatSize(summary.estimatedSaving) }}</strong>{{ savingPercent !== null ? ` (${savingPercent}%)` : '' }}
+          <template v-if="replaceOriginals">
+            · est. saving <strong>~{{ formatSize(summary.estimatedSaving) }}</strong>{{ savingPercent !== null ? ` (${savingPercent}%)` : '' }}
+          </template>
+          <template v-else>· download only, no space freed</template>
           <span v-if="summary.unknownCount > 0" class="muted">
             ({{ summary.unknownCount }} without enough info to estimate)
           </span>
@@ -152,7 +155,11 @@ const qualityChoices = computed(() => {
   return options
 })
 
-const settings = computed(() => ({ targetHeight: targetHeight.value, crf: crf.value }))
+const settings = computed(() => ({
+  targetHeight: targetHeight.value,
+  crf: crf.value,
+  minSavingPercent: props.config.minSavingPercent,
+}))
 const summary = computed(() => summariseEstimates(props.files, settings.value))
 const savingPercent = computed(() =>
   summary.value.totalSize > 0
@@ -183,7 +190,9 @@ function close() {
 
 function confirm() {
   if (props.files.length === 0) return
-  emit('confirm', { targetHeight: targetHeight.value, crf: crf.value })
+  const changed =
+    targetHeight.value !== props.config.targetHeight || crf.value !== props.config.crf
+  emit('confirm', { targetHeight: targetHeight.value, crf: crf.value, changed })
   emit('update:modelValue', false)
 }
 
