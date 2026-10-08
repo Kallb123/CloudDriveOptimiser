@@ -19,6 +19,7 @@ If quality is a concern, take a backup of the originals elsewhere before optimis
 - **Google Photos Picker** — select specific videos from your Google Photos library using the official Google Photos Picker API
 - **Thumbnails** — optional thumbnail view for images and videos
 - **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720p (configurable) using FFmpeg
+- **Safe replacement** — originals go to the Drive bin, and are only replaced when there's a real saving
 - **Job tracking** — real-time progress display for each transcoding job
 - **Upload summary** — completed optimisations list the original file size, new file size, capture timestamp, and filenames
 - **Pagination** — load more files on demand
@@ -36,7 +37,7 @@ If quality is a concern, take a backup of the originals elsewhere before optimis
 │         localhost:3000               │
 │  • Google OAuth flow                 │
 │  • Drive API (list / download /      │
-│    upload / delete)                  │
+│    upload / trash)                   │
 │  • Photos Picker API (session        │
 │    creation / item retrieval)        │
 │  • Photos Library API (download /    │
@@ -123,6 +124,8 @@ Open `.env` and fill in the values:
 | `TRANSCODE_HEIGHT` | Target video height in pixels (default `720`) |
 | `TRANSCODE_CRF` | FFmpeg CRF quality (default `28`; lower = higher quality) |
 | `TRANSCODE_PRESET` | FFmpeg encoding preset (default `medium`) |
+| `MAX_CONCURRENT_JOBS` | Number of videos processed at the same time (default `1`) |
+| `MIN_SAVING_PERCENT` | Minimum size reduction (%) required before an original is replaced (default `10`) |
 
 ## Running with Docker Compose
 
@@ -182,17 +185,19 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 3. Click **Analyse library** to fetch your largest Drive files.
 4. (Optional) Click **Select Photos Videos** to open the Google Photos Picker and choose specific videos from your Google Photos library.
 5. Toggle **Show thumbnails** to preview images and videos inline.
-6. Check the boxes next to one or more **video** files from Drive or Google Photos.
-7. Click **Optimise selected** to begin the transcoding pipeline:
+6. Check the boxes next to one or more **video** files from Drive or Google Photos. The summary bar above the table shows the total size and an estimated saving for all optimisable videos (and for your selection), and the **Est. saving** column shows an estimate per video. These are rough estimates based on resolution and duration, not guarantees.
+7. Click **Optimise selected** to open the **Review & confirm** dialog. Choose the output **resolution** and **quality** for this batch (defaults come from `TRANSCODE_HEIGHT` and `TRANSCODE_CRF`), check the estimated saving and the list of what will happen to Drive and Google Photos originals, and decide whether to **Replace originals with optimised copies** (turn it off to only download the optimised files). Click **Optimise N videos** to start the transcoding pipeline. Selected videos are processed one at a time by default (see `MAX_CONCURRENT_JOBS`); videos waiting for their turn show as **Queued**. For each video:
    - The video is downloaded from Drive or Google Photos.
-   - FFmpeg re-encodes it at the configured resolution and quality.
+   - FFmpeg re-encodes it at the chosen resolution and quality.
    - Embedded metadata is copied onto the optimised MP4.
-   - Drive videos are uploaded back to the same folder in Drive and the original is deleted automatically.
+   - If the optimised copy is not at least `MIN_SAVING_PERCENT` smaller than the original, the job is marked **Skipped** and the original is left untouched (nothing is uploaded or removed).
+   - Otherwise, Drive videos are uploaded back to the same folder in Drive and the original is moved to the Drive bin (restorable for 30 days).
+   - Videos already at or below the target resolution are shown as not optimisable and are never upscaled.
    - Google Photos videos are uploaded back into Google Photos as new items.
    Google Photos items will be stored in an album created for this app, making it easier to locate them.
-8. The **Optimisation Jobs** panel shows real-time progress for each file.
+8. The **Optimisation Jobs** panel shows real-time progress for each file. Use **Cancel** to stop a queued or running job (it can't be cancelled once the upload has started), and **Retry** to re-run a failed or cancelled job. If the backend restarts while jobs are in progress, those jobs are marked as errors ("Interrupted by a server restart"); if one was interrupted during an upload, Retry warns that an optimised copy may already exist, so check before retrying.
 9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
-10. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
+10. Google doesn't let apps delete Google Photos items, so completed Google Photos uploads appear in a **cleanup checklist** showing how many originals (and how much space) are still to remove. For each one, use **Search in Google Photos** to find the original, delete it yourself, then tick **Removed**. Your ticks are saved on the server.
 
 ## Project Structure
 

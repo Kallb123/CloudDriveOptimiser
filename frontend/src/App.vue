@@ -55,16 +55,10 @@
               Google Photos Picker
             </button>
           </div>
-          <div>
-            <label class="toggle btn btn-secondary">
-              <input type="checkbox" v-model="uploadAfterOptimise" />
-              Upload optimised copy after transcoding
-            </label>
-          </div>
         </div>
 
-        <div v-if="notices.length" class="notice-list">
-          <div v-for="(notice, index) in notices" :key="notice.id" class="alert alert-info alert-dismissible">
+        <div v-if="visibleNotices.length" class="notice-list">
+          <div v-for="(notice, index) in visibleNotices" :key="notice.id" class="alert alert-info alert-dismissible">
             <span>{{ notice.message }}</span>
             <button class="alert-close" @click="dismissNotice(index)" aria-label="Dismiss notice">×</button>
           </div>
@@ -78,15 +72,33 @@
           :loading="loading"
           :optimising="optimising"
           :nextPageToken="nextPageToken"
-          @optimise="startOptimise"
+          :settings="defaultSettings"
+          @optimise="openConfirm"
           @refresh="analyseFiles"
           @load-more="loadMore"
         />
 
         <div ref="jobStatusAnchor">
-          <JobStatus :jobs="jobList" @clear="clearOptimisationHistory" />
+          <JobStatus
+            :jobs="jobList"
+            :photosAlbumUrl="photosAlbumUrl"
+            :pendingJobIds="pendingJobIds"
+            @clear="clearOptimisationHistory"
+            @cancel="cancelJob"
+            @retry="retryJob"
+            @cleanup="setCleanup"
+          />
         </div>
       </div>
+
+      <!-- Review & confirm Modal -->
+      <OptimiseConfirmModal
+        v-model="confirmModalOpen"
+        v-model:replaceOriginals="uploadAfterOptimise"
+        :files="confirmFiles"
+        :config="config"
+        @confirm="handleConfirm"
+      />
 
       <!-- Photo Picker Modal -->
       <PhotoPickerModal
@@ -102,11 +114,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
 import PhotoPickerModal from './components/PhotoPickerModal.vue'
+import OptimiseConfirmModal from './components/OptimiseConfirmModal.vue'
 
 
 const appVersion = __APP_VERSION__;
@@ -120,8 +133,33 @@ const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
+// Bumped whenever jobList is changed locally (POST results); a status GET that
+// started before the bump is stale and must not overwrite the newer state.
+let jobsVersion = 0
+const photosAlbumUrl = ref(null)
+// jobIds with a cancel/retry/cleanup request in flight (disables their buttons)
+const pendingJobIds = ref(new Set())
 const uploadAfterOptimise = ref(true)
 const authError = ref(false)
+const FALLBACK_CONFIG = {
+  targetHeight: 720,
+  crf: 28,
+  minSavingPercent: 10,
+  resolutionOptions: [480, 720, 1080],
+  qualityOptions: [
+    { key: 'smaller', label: 'Smaller file', crf: 30 },
+    { key: 'balanced', label: 'Balanced', crf: 28 },
+    { key: 'quality', label: 'Higher quality', crf: 23 },
+  ],
+}
+const config = ref({ ...FALLBACK_CONFIG, fromFallback: true })
+const defaultSettings = computed(() => ({
+  targetHeight: config.value.targetHeight,
+  crf: config.value.crf,
+  minSavingPercent: config.value.minSavingPercent,
+}))
+const confirmModalOpen = ref(false)
+const confirmFiles = ref([])
 const notices = ref([
   {
     id: 'location-loss',
@@ -139,13 +177,30 @@ const notices = ref([
     id: 'account-storage',
     message: 'The optimised videos will take up space on your Google account.',
   },
+  { id: 'min-saving' },
 ])
+const visibleNotices = computed(() =>
+  notices.value.map((notice) =>
+    notice.id === 'min-saving'
+      ? {
+          ...notice,
+          message: `Originals are only replaced when the optimised copy is at least ${config.value.minSavingPercent}% smaller; smaller videos are skipped.`,
+        }
+      : notice
+  )
+)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 const jobStatusAnchor = ref(null)
 
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
 const PHOTO_PICKER_STORAGE_TTL_MS = 60 * 60 * 1000 // 60 minutes
+
+const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error', 'cancelled'])
+
+function isJobFinished(job) {
+  return TERMINAL_STATUSES.has(job.status)
+}
 
 let pollTimer = null
 let pollingActive = false
@@ -340,6 +395,7 @@ async function logout() {
   files.value = []
   analysed.value = false
   jobList.value = []
+  jobsVersion++
   stopPolling()
 }
 
@@ -396,13 +452,40 @@ function handlePhotosSelected(photoFiles) {
 
 // ---- Optimisation ----
 
-async function startOptimise(items) {
+async function openConfirm(selectedFiles) {
+  if (!Array.isArray(selectedFiles) || selectedFiles.length === 0) return
+  error.value = null
+  // If the server config could not be loaded earlier, retry once so the dialog
+  // shows (and sends) the server's real defaults where possible.
+  if (config.value.fromFallback) await loadConfig()
+  confirmFiles.value = selectedFiles
+  confirmModalOpen.value = true
+}
+
+function handleConfirm({ targetHeight, crf, changed } = {}) {
+  // With only the fallback defaults and no change by the user, omit `options`
+  // so the server applies its own configured defaults.
+  const options = config.value.fromFallback && !changed ? undefined : { targetHeight, crf }
+  const items = confirmFiles.value.map((file) => {
+    const item = { id: file.id, source: file.source || 'drive' }
+    if (file.source === 'photos' && file.mediaItem) {
+      item.mediaItem = file.mediaItem
+    }
+    return item
+  })
+  startOptimise(items, options)
+}
+
+async function startOptimise(items, options) {
   error.value = null
   optimising.value = true
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
-      { items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })) },
+      {
+        items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })),
+        options,
+      },
       { withCredentials: true }
     )
     // Seed job list entries
@@ -417,6 +500,7 @@ async function startOptimise(items) {
       upload,
     }))
     jobList.value = [...jobList.value, ...newJobs]
+    jobsVersion++
     startPolling()
 
     await nextTick()
@@ -432,22 +516,24 @@ async function startOptimise(items) {
 
 async function pollJobs() {
   if (!pollingActive || jobList.value.length === 0) return
+  const version = jobsVersion
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
-    jobList.value = data.jobs || []
-    handlePersistedPhotoJobErrors(jobList.value)
-    optimising.value = jobList.value.some(
-      (j) => j.status !== 'complete' && j.status !== 'error'
-    )
+    // A job action landed while this request was in flight: drop the stale
+    // response and let the next poll pick up the current state.
+    if (version === jobsVersion) {
+      jobList.value = data.jobs || []
+      photosAlbumUrl.value = data.photosAlbumUrl || null
+      handlePersistedPhotoJobErrors(jobList.value)
+      optimising.value = jobList.value.some((j) => !isJobFinished(j))
 
-    const allDone = jobList.value.every(
-      (j) => j.status === 'complete' || j.status === 'error'
-    )
-    if (allDone) {
-      stopPolling()
-      optimising.value = false
-      if (analysed.value) await analyseFiles()
-      return
+      const allDone = jobList.value.every(isJobFinished)
+      if (allDone) {
+        stopPolling()
+        optimising.value = false
+        if (analysed.value) await analyseFiles()
+        return
+      }
     }
   } catch {
     // Silently ignore poll errors
@@ -475,12 +561,58 @@ function stopPolling() {
   }
 }
 
+// POST a per-job action and merge the returned job into the list. Returns the
+// job on success, or null on failure (after showing the server's error).
+async function postJobAction(jobId, action, body = {}) {
+  if (pendingJobIds.value.has(jobId)) return null
+  error.value = null
+  pendingJobIds.value.add(jobId)
+  try {
+    const { data } = await axios.post(
+      `/api/optimise/jobs/${encodeURIComponent(jobId)}/${action}`,
+      body,
+      { withCredentials: true }
+    )
+    if (!data?.job) return null
+    jobList.value = jobList.value.map((j) => (j.jobId === jobId ? { ...j, ...data.job } : j))
+    jobsVersion++
+    return data.job
+  } catch (err) {
+    console.error(`Failed to ${action} job`, err)
+    error.value = err.response?.data?.error || `Failed to ${action} job`
+    return null
+  } finally {
+    pendingJobIds.value.delete(jobId)
+  }
+}
+
+// Make sure the list keeps updating after a job changed state.
+function resumePolling() {
+  optimising.value = jobList.value.some((j) => !isJobFinished(j))
+  if (optimising.value) startPolling()
+}
+
+async function cancelJob(jobId) {
+  if (await postJobAction(jobId, 'cancel')) resumePolling()
+}
+
+async function retryJob(jobId) {
+  if (await postJobAction(jobId, 'retry')) resumePolling()
+}
+
+async function setCleanup({ jobId, removed, input }) {
+  const job = await postJobAction(jobId, 'cleanup', { removed: !!removed })
+  // The checkbox is uncontrolled between renders, so undo the tick ourselves.
+  if (!job && input) input.checked = !removed
+}
+
 async function clearOptimisationHistory() {
   error.value = null
   stopPolling()
   try {
     await axios.post('/api/optimise/clear', {}, { withCredentials: true })
     jobList.value = []
+    jobsVersion++
     optimising.value = false
   } catch (err) {
     console.error('Failed to clear optimisation history', err)
@@ -490,14 +622,29 @@ async function clearOptimisationHistory() {
 
 // ---- Lifecycle ----
 
+async function loadConfig() {
+  try {
+    const { data } = await axios.get('/api/optimise/config', { withCredentials: true })
+    config.value = { ...FALLBACK_CONFIG, ...data }
+  } catch (err) {
+    console.warn('Failed to load optimise config, using defaults', err?.message || err)
+    config.value = { ...FALLBACK_CONFIG, fromFallback: true }
+  }
+}
+
 async function hydrateJobs() {
+  const version = jobsVersion
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
+    if (version !== jobsVersion) {
+      // Local changes landed meanwhile; keep them and just make sure polling runs.
+      if (jobList.value.some((j) => !isJobFinished(j))) startPolling()
+      return
+    }
     jobList.value = data.jobs || []
+    photosAlbumUrl.value = data.photosAlbumUrl || null
     handlePersistedPhotoJobErrors(jobList.value)
-    optimising.value = jobList.value.some(
-      (j) => j.status !== 'complete' && j.status !== 'error'
-    )
+    optimising.value = jobList.value.some((j) => !isJobFinished(j))
     if (optimising.value) {
       startPolling()
     }
@@ -519,7 +666,7 @@ onMounted(async () => {
       files.value = mergeFiles([], persistedPhotos)
       await validatePersistedPhotos(persistedPhotos)
     }
-    await hydrateJobs()
+    await Promise.all([loadConfig(), hydrateJobs()])
     await analyseFiles()
   }
 })

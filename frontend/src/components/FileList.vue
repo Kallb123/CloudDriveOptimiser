@@ -16,11 +16,34 @@
       </label>
       <button
         class="btn btn-primary"
-        :disabled="selectedItems.length === 0 || optimising"
-        @click="$emit('optimise', selectedItems)"
+        :disabled="selectedFiles.length === 0 || optimising"
+        @click="$emit('optimise', selectedFiles)"
       >
-        Optimise selected ({{ selectedItems.length }})
+        Optimise selected ({{ selectedFiles.length }})
       </button>
+    </div>
+
+    <div
+      v-if="optimisableFiles.length > 0"
+      class="summary-bar"
+      title="Rough estimate based on resolution and duration"
+    >
+      <span>
+        <strong>{{ overall.count }}</strong>
+        optimisable {{ overall.count === 1 ? 'video' : 'videos' }}
+        · {{ formatSize(overall.totalSize) }}
+        · est. saving <strong>~{{ formatSize(overall.estimatedSaving) }}</strong>
+        <span v-if="overall.unknownCount > 0" class="summary-muted">
+          ({{ overall.unknownCount }} without enough info to estimate)
+        </span>
+      </span>
+      <span v-if="selectedFiles.length > 0" class="summary-selected">
+        Selected: <strong>{{ selectedFiles.length }}</strong>
+        · {{ formatSize(selection.totalSize) }} → ~{{ formatSize(selection.estimatedSize) }}
+        <span v-if="selection.unknownCount > 0" class="summary-muted">
+          ({{ selection.unknownCount }} without enough info to estimate)
+        </span>
+      </span>
     </div>
 
     <div v-if="files.length === 0" class="empty">
@@ -34,6 +57,7 @@
           <th v-if="showThumbnails">Thumbnail</th>
           <th>Name</th>
           <th>Size ▼</th>
+          <th title="Rough estimate based on resolution and duration">Est. saving</th>
           <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
@@ -42,7 +66,7 @@
       </thead>
       <tbody v-if="optimisableFiles.length > 0">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 8 : 7">Optimisable videos</td>
+          <td :colspan="showThumbnails ? 9 : 8">Optimisable videos</td>
         </tr>
         <tr
           v-for="file in optimisableFiles"
@@ -79,8 +103,12 @@
             <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
               {{ file.name }}
             </a>
+            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
+              {{ file.notOptimisableReason || 'Already ≤720p' }}
+            </span>
           </td>
           <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
+          <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
           <td class="resolution-cell">{{ fileResolution(file) }}</td>
           <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
           <td class="source-cell">{{ sourceLabel(file.source) }}</td>
@@ -89,7 +117,7 @@
       </tbody>
       <tbody v-if="otherFiles.length > 0">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 8 : 7">Other files</td>
+          <td :colspan="showThumbnails ? 9 : 8">Not optimisable</td>
         </tr>
         <tr
           v-for="file in otherFiles"
@@ -126,8 +154,12 @@
             <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
               {{ file.name }}
             </a>
+            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
+              {{ file.notOptimisableReason || 'Already ≤720p' }}
+            </span>
           </td>
           <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
+          <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
           <td class="resolution-cell">{{ fileResolution(file) }}</td>
           <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
           <td class="source-cell">{{ sourceLabel(file.source) }}</td>
@@ -146,12 +178,15 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { formatSize, estimateSaving, summariseEstimates } from '../utils/estimate.js'
 
 const props = defineProps({
   files: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   optimising: { type: Boolean, default: false },
   nextPageToken: { type: String, default: null },
+  // Default { targetHeight, crf } used for the estimates shown in the list.
+  settings: { type: Object, default: () => ({ targetHeight: 720, crf: 28 }) },
 })
 
 const emit = defineEmits(['optimise', 'refresh', 'load-more'])
@@ -176,17 +211,11 @@ const otherFiles = computed(() =>
     .filter((f) => !f.optimisable)
     .sort((a, b) => b.size - a.size)
 )
-const selectedItems = computed(() =>
-  props.files
-    .filter((file) => selectedIds.value.includes(file.id))
-    .map((file) => {
-      const item = { id: file.id, source: file.source || 'drive' }
-      if (file.source === 'photos' && file.mediaItem) {
-        item.mediaItem = file.mediaItem
-      }
-      return item
-    })
+const selectedFiles = computed(() =>
+  props.files.filter((file) => file.optimisable && selectedIds.value.includes(file.id))
 )
+const overall = computed(() => summariseEstimates(optimisableFiles.value, props.settings))
+const selection = computed(() => summariseEstimates(selectedFiles.value, props.settings))
 const allSelected = computed(
   () => optimisableFiles.value.length > 0 && optimisableFiles.value.every((f) => selectedIds.value.includes(f.id))
 )
@@ -211,19 +240,15 @@ function toggleAll(e) {
 function checkboxTitle(file) {
   if (file.optimisable && file.source === 'photos') return 'Select Google Photos video for optimisation'
   if (file.optimisable) return 'Select Drive video for optimisation'
-  return 'Only video files can be optimised'
+  return file.notOptimisableReason || 'Only video files can be optimised'
 }
 
-function formatSize(bytes) {
-  if (bytes == null) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let val = bytes
-  let i = 0
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024
-    i++
-  }
-  return `${val.toFixed(1)} ${units[i]}`
+function savingLabel(file) {
+  if (!file.optimisable || !file.isVideo) return '—'
+  const saving = estimateSaving(file, props.settings)
+  if (saving === null) return '—'
+  const pct = file.size > 0 ? Math.round((saving / file.size) * 100) : 0
+  return `~${formatSize(saving)} (${pct}%)`
 }
 
 function formatDate(iso) {
@@ -270,6 +295,30 @@ function fileResolution(file) {
   align-items: center;
   gap: 0.4rem;
   cursor: pointer;
+}
+
+.summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1.5rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  color: #2a4365;
+  font-size: 0.9rem;
+}
+
+.summary-selected {
+  font-weight: 500;
+}
+
+.summary-muted {
+  color: #718096;
+  font-size: 0.8rem;
+  font-weight: 400;
 }
 
 .table {
@@ -329,9 +378,27 @@ function fileResolution(file) {
   text-decoration: underline;
 }
 
+.tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  background: #edf2f7;
+  color: #718096;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .size-cell {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.saving-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #2c5282;
 }
 
 .resolution-cell {

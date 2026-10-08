@@ -10,8 +10,9 @@ const { createOAuthClient } = require('./auth');
 const router = express.Router();
 
 const MAX_FILES = parseInt(process.env.MAX_FILES || '200', 10);
+const TARGET_HEIGHT = parseInt(process.env.TRANSCODE_HEIGHT || '720', 10);
 const FILE_FIELDS =
-  'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents, videoMediaMetadata(width,height))';
+  'nextPageToken, files(id, name, size, quotaBytesUsed, mimeType, createdTime, modifiedTime, thumbnailLink, webContentLink, webViewLink, parents, videoMediaMetadata(width,height,durationMillis))';
 
 // Middleware: require authenticated session
 function requireAuth(req, res, next) {
@@ -113,11 +114,24 @@ async function estimatePhotoSize(mediaItem, accessToken) {
   return pixelCount;
 }
 
+// Returns why a file can't be optimised, or null if it can. The short side is
+// compared so portrait videos are treated the same as landscape ones. Unknown
+// resolution stays optimisable (the ffmpeg scale filter never upscales).
+function getNotOptimisableReason(isVideo, width, height) {
+  if (!isVideo) return 'Only video files can be optimised';
+  if (width > 0 && height > 0 && Math.min(width, height) <= TARGET_HEIGHT) {
+    return `Already ${TARGET_HEIGHT}p or lower`;
+  }
+  return null;
+}
+
 function mapDriveFile(file) {
   const isVideo = (file.mimeType || '').startsWith('video/');
   const width = parseInt(file.videoMediaMetadata?.width || '0', 10);
   const height = parseInt(file.videoMediaMetadata?.height || '0', 10);
   const resolution = width > 0 && height > 0 ? `${width}×${height}` : null;
+  const durationMillis = parseInt(file.videoMediaMetadata?.durationMillis || '0', 10) || null;
+  const notOptimisableReason = getNotOptimisableReason(isVideo, width, height);
 
   return {
     id: file.id,
@@ -131,9 +145,12 @@ function mapDriveFile(file) {
     width: width || null,
     height: height || null,
     resolution,
+    durationMillis,
     isVideo,
     source: 'drive',
-    optimisable: isVideo,
+    optimisable: isVideo && !notOptimisableReason,
+    alreadyOptimised: Boolean(isVideo && notOptimisableReason),
+    notOptimisableReason,
   };
 }
 
@@ -153,6 +170,7 @@ async function mapPhotoMediaItem(mediaItem, accessToken, session) {
   const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
   const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
   const baseUrl = mediaFile.baseUrl || mediaItem.baseUrl || null;
+  const notOptimisableReason = getNotOptimisableReason(isVideo, width, height);
   const thumbnailRoute = mediaItem.id && baseUrl
     ? `/api/drive/photo-thumbnail/${encodeURIComponent(mediaItem.id)}`
     : null;
@@ -174,10 +192,13 @@ async function mapPhotoMediaItem(mediaItem, accessToken, session) {
     width: width || null,
     height: height || null,
     resolution,
+    durationMillis: null, // the Photos Picker API does not provide duration
     mediaItem,
     isVideo,
     source: 'photos',
-    optimisable: isVideo,
+    optimisable: isVideo && !notOptimisableReason,
+    alreadyOptimised: Boolean(isVideo && notOptimisableReason),
+    notOptimisableReason,
   };
 }
 
