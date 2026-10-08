@@ -124,6 +124,7 @@ Open `.env` and fill in the values:
 | `TRANSCODE_HEIGHT` | Target video height in pixels (default `720`) |
 | `TRANSCODE_CRF` | FFmpeg CRF quality (default `28`; lower = higher quality) |
 | `TRANSCODE_PRESET` | FFmpeg encoding preset (default `medium`) |
+| `MAX_CONCURRENT_JOBS` | Number of videos processed at the same time (default `1`) |
 | `MIN_SAVING_PERCENT` | Minimum size reduction (%) required before an original is replaced (default `10`) |
 
 ## Running with Docker Compose
@@ -185,7 +186,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 4. (Optional) Click **Select Photos Videos** to open the Google Photos Picker and choose specific videos from your Google Photos library.
 5. Toggle **Show thumbnails** to preview images and videos inline.
 6. Check the boxes next to one or more **video** files from Drive or Google Photos.
-7. Click **Optimise selected** to begin the transcoding pipeline:
+7. Click **Optimise selected** to begin the transcoding pipeline. Selected videos are processed one at a time by default (see `MAX_CONCURRENT_JOBS`); videos waiting for their turn show as **Queued**. For each video:
    - The video is downloaded from Drive or Google Photos.
    - FFmpeg re-encodes it at the configured resolution and quality.
    - Embedded metadata is copied onto the optimised MP4.
@@ -194,7 +195,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
    - Videos already at or below the target resolution are shown as not optimisable and are never upscaled.
    - Google Photos videos are uploaded back into Google Photos as new items.
    Google Photos items will be stored in an album created for this app, making it easier to locate them.
-8. The **Optimisation Jobs** panel shows real-time progress for each file.
+8. The **Optimisation Jobs** panel shows real-time progress for each file. If the backend restarts while jobs are in progress, those jobs are marked as errors ("Interrupted by a server restart") so you can select the videos and run them again.
 9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
 10. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
 

@@ -105,8 +105,12 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend server running on port ${PORT}`);
+// Mark jobs interrupted by a previous restart as failed before accepting
+// requests (recovery never throws, so startup always continues).
+optimiseRouter.recoverInterruptedJobs().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Backend server running on port ${PORT}`);
+  });
 });
 
 module.exports = app;

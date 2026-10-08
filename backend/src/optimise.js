@@ -16,13 +16,16 @@ const {
   uploadPhotoVideo,
 } = require('./photos-api');
 const jobStore = require('./job-store');
+const { createJobQueue } = require('./job-queue');
 
 const router = express.Router();
 const jobs = {};
 
 const TARGET_HEIGHT = parseInt(process.env.TRANSCODE_HEIGHT || '720', 10);
 const VIDEO_CRF = parseInt(process.env.TRANSCODE_CRF || '28', 10);
-const VIDEO_PRESET = process.env.VIDEO_PRESET || 'medium';
+// VIDEO_PRESET is the legacy name, kept as a fallback for existing deployments.
+const VIDEO_PRESET = process.env.TRANSCODE_PRESET || process.env.VIDEO_PRESET || 'medium';
+const MAX_CONCURRENT_JOBS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_JOBS || '1', 10) || 1);
 const MIN_SAVING_PERCENT = parseFloat(process.env.MIN_SAVING_PERCENT || '10');
 const LOG_PREFIX = '[optimise]';
 
@@ -35,6 +38,45 @@ async function enqueuePhotosUpload(task) {
   // Keep the chain alive even if a task fails so subsequent uploads still run.
   photosUploadMutex.current = next.catch(() => {});
   return next;
+}
+
+// FIFO queue of jobs waiting for a free slot. Jobs stay 'queued' until started.
+const jobQueue = createJobQueue({
+  limit: MAX_CONCURRENT_JOBS,
+  run: ({ jobId, item, tokens }) => processJob(jobId, item, tokens),
+  onError: (err, { jobId }) => {
+    console.error(`${LOG_PREFIX} Job ${jobId} failed:`, err.message);
+  },
+});
+
+function removeTempFile(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn(`${LOG_PREFIX} failed to remove temp file`, { path: filePath, error: err.message });
+    }
+  }
+}
+
+/**
+ * Run once at startup, before requests are accepted: any job still in a
+ * non-terminal state was interrupted by a restart, so mark it as failed and
+ * remove its temp files. Never throws.
+ */
+async function recoverInterruptedJobs() {
+  try {
+    const recovered = await jobStore.recoverInterruptedJobs();
+    for (const { jobId } of recovered) {
+      removeTempFile(path.join(os.tmpdir(), `cdo_input_${jobId}`));
+      removeTempFile(path.join(os.tmpdir(), `cdo_output_${jobId}.mov`));
+    }
+    console.log(`${LOG_PREFIX} recovered ${recovered.length} job(s) interrupted by a restart`);
+    return recovered;
+  } catch (err) {
+    console.error(`${LOG_PREFIX} failed to recover interrupted jobs:`, err.message);
+    return [];
+  }
 }
 
 function sanitizeJob(job) {
@@ -378,13 +420,16 @@ router.post('/start', requireAuth, async (req, res) => {
 
   const tokens = req.session.tokens;
 
-  // Process jobs asynchronously
-  queuedJobs.forEach(({ jobId, fileId, source, item }) => {
+  // Jobs run in the background, at most MAX_CONCURRENT_JOBS at a time
+  queuedJobs.forEach(({ jobId, fileId, source }) => {
     console.log(`${LOG_PREFIX} queued optimisation job`, { jobId, fileId, source });
-    processJob(jobId, item, tokens).catch((err) => {
-      console.error(`${LOG_PREFIX} Job ${jobId} failed:`, err.message);
-    });
   });
+  jobQueue.enqueue(...queuedJobs.map(({ jobId, item }) => ({
+    jobId,
+    sessionId: req.sessionID,
+    item,
+    tokens,
+  })));
 
   return res.json({ jobs: queuedJobs.map(({ jobId, fileId, source, upload }) => ({ jobId, fileId, source, upload })) });
 });
@@ -398,6 +443,25 @@ router.post('/clear', requireAuth, async (req, res) => {
     sessionId: req.sessionID,
     userId: req.session?.user?.id,
   });
+  // Drop this session's not-yet-started jobs so they don't run invisibly after
+  // the history is cleared. Running jobs are left alone.
+  const cancelled = jobQueue.removePending((entry) => entry.sessionId === req.sessionID);
+  for (const { jobId } of cancelled) {
+    const job = jobs[jobId];
+    delete jobs[jobId];
+    if (job) {
+      // Persist a terminal state so the job leaves the active set.
+      job.status = 'error';
+      job.error = 'Cancelled before it started';
+      await jobStore.saveJob(job).catch((err) => {
+        console.error(`${LOG_PREFIX} failed to persist cancelled job`, { jobId, error: err.message });
+      });
+    }
+  }
+  if (cancelled.length > 0) {
+    console.log(`${LOG_PREFIX} removed ${cancelled.length} queued job(s) from the pending queue`, { sessionId: req.sessionID });
+  }
+
   const sessionJobs = await jobStore.loadSessionJobs(req.sessionID);
   for (const job of sessionJobs) {
     if (job?.tempOutputPath) {
@@ -634,7 +698,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     driveOrientationIsPortrait,
     (pct) => {
       job.progress = Math.round(pct);
-      jobStore.saveJob(job);
+      jobStore.saveJob(job).catch(() => {});
     }
   );
   job.progress = 100;
@@ -801,3 +865,4 @@ function buildOptimisedName(originalName, height) {
 module.exports = router;
 module.exports.buildOptimisedName = buildOptimisedName;
 module.exports.hasWorthwhileSaving = hasWorthwhileSaving;
+module.exports.recoverInterruptedJobs = recoverInterruptedJobs;
