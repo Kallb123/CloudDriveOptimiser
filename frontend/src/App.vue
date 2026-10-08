@@ -55,11 +55,15 @@
               Google Photos Picker
             </button>
           </div>
-          <div>
+          <div class="toggle-group">
             <label class="toggle btn btn-secondary">
               <input type="checkbox" v-model="uploadAfterOptimise" />
-              Upload optimised copy after transcoding
+              Replace originals with optimised copies
             </label>
+            <p class="toggle-hint">
+              Drive originals are moved to the bin (restorable for 30 days). Google Photos copies are
+              added alongside the original. Turn off to only download the optimised files.
+            </p>
           </div>
         </div>
 
@@ -139,6 +143,10 @@ const notices = ref([
     id: 'account-storage',
     message: 'The optimised videos will take up space on your Google account.',
   },
+  {
+    id: 'min-saving',
+    message: 'Originals are only replaced when the optimised copy is at least 10% smaller; smaller videos are skipped.',
+  },
 ])
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
@@ -146,6 +154,12 @@ const jobStatusAnchor = ref(null)
 
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
 const PHOTO_PICKER_STORAGE_TTL_MS = 60 * 60 * 1000 // 60 minutes
+
+const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error'])
+
+function isJobFinished(job) {
+  return TERMINAL_STATUSES.has(job.status)
+}
 
 let pollTimer = null
 let pollingActive = false
@@ -436,13 +450,9 @@ async function pollJobs() {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
     handlePersistedPhotoJobErrors(jobList.value)
-    optimising.value = jobList.value.some(
-      (j) => j.status !== 'complete' && j.status !== 'error'
-    )
+    optimising.value = jobList.value.some((j) => !isJobFinished(j))
 
-    const allDone = jobList.value.every(
-      (j) => j.status === 'complete' || j.status === 'error'
-    )
+    const allDone = jobList.value.every(isJobFinished)
     if (allDone) {
       stopPolling()
       optimising.value = false
@@ -495,9 +505,7 @@ async function hydrateJobs() {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
     handlePersistedPhotoJobErrors(jobList.value)
-    optimising.value = jobList.value.some(
-      (j) => j.status !== 'complete' && j.status !== 'error'
-    )
+    optimising.value = jobList.value.some((j) => !isJobFinished(j))
     if (optimising.value) {
       startPolling()
     }
@@ -658,6 +666,20 @@ body {
   font-size: 1.25rem;
   color: #2d3748;
   margin: 0;
+}
+
+.toggle-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  max-width: 340px;
+}
+
+.toggle-hint {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: #718096;
 }
 
 .header-buttons {

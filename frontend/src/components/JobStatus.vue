@@ -36,6 +36,11 @@
     </table>
 
     <div v-if="completedJobs.length > 0" class="completed-uploads">
+      <div v-if="downloadError" class="download-error" role="alert">
+        <span>{{ downloadError }}</span>
+        <button class="download-error-close" @click="downloadError = null" aria-label="Dismiss error">×</button>
+      </div>
+
       <div v-if="photosCleanupRequired" class="cleanup-note">
         Remove the original Google Photos videos manually to recover storage space.
       </div>
@@ -87,12 +92,14 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import axios from 'axios'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
 })
+
+const downloadError = ref(null)
 
 const completedJobs = computed(() =>
   props.jobs.filter((job) => job.status === 'complete' && job.downloadAvailable && (job.newFileName || job.newFileId))
@@ -114,6 +121,7 @@ function buildDownloadLink(blob, filename) {
 }
 
 async function downloadJob(jobId, filename) {
+  downloadError.value = null
   try {
     const response = await axios.get(`/api/optimise/download/${encodeURIComponent(jobId)}`, {
       responseType: 'blob',
@@ -122,11 +130,12 @@ async function downloadJob(jobId, filename) {
     buildDownloadLink(response.data, filename || `job-${jobId}.mov`)
   } catch (err) {
     console.error('Failed to download job', err)
-    alert('Unable to download this file. Please try again.')
+    downloadError.value = 'Unable to download this file. Please try again.'
   }
 }
 
 async function downloadAll() {
+  downloadError.value = null
   try {
     const response = await axios.get('/api/optimise/download-all', {
       responseType: 'blob',
@@ -135,7 +144,7 @@ async function downloadAll() {
     buildDownloadLink(response.data, 'cdo-optimised-videos.zip')
   } catch (err) {
     console.error('Failed to download all jobs', err)
-    alert('Unable to download all files. Please try again.')
+    downloadError.value = 'Unable to download all files. Please try again.'
   }
 }
 
@@ -145,8 +154,9 @@ const STATUS_LABELS = {
   downloading: 'Downloading',
   transcoding: 'Transcoding',
   uploading: 'Uploading',
-  deleting_original: 'Deleting original',
+  trashing_original: 'Moving original to bin',
   complete: 'Complete',
+  skipped: 'Skipped',
   error: 'Error',
 }
 
@@ -162,7 +172,13 @@ function statusDetail(job) {
     if (job.upload === false) {
       return `✓ Optimised copy ready for download as "${job.newFileName}"`
     }
+    if (job.originalTrashed) {
+      return `✓ Saved as "${job.newFileName}" — original moved to Drive bin`
+    }
     return `✓ Saved as "${job.newFileName}"`
+  }
+  if (job.status === 'skipped') {
+    return job.skipReason || 'No meaningful saving — original kept'
   }
   if (job.status === 'downloading') {
     return job.source === 'photos' ? 'Downloading from Google Photos…' : 'Downloading from Drive…'
@@ -170,7 +186,7 @@ function statusDetail(job) {
   if (job.status === 'uploading') {
     return job.source === 'photos' ? 'Uploading to Google Photos…' : 'Uploading to Drive…'
   }
-  if (job.status === 'deleting_original') return 'Removing original from Drive…'
+  if (job.status === 'trashing_original') return 'Moving original to Drive bin…'
   return ''
 }
 
@@ -242,6 +258,34 @@ function destinationLabel(destination) {
   font-size: 0.9rem;
 }
 
+.download-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: #fff5f5;
+  border: 1px solid #fed7d7;
+  color: #c53030;
+  font-size: 0.85rem;
+}
+
+.download-error-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.download-error-close:hover {
+  opacity: 0.75;
+}
+
 .completed-header {
   display: flex;
   align-items: center;
@@ -309,9 +353,10 @@ function destinationLabel(destination) {
 .badge-fetching_metadata,
 .badge-downloading,
 .badge-uploading,
-.badge-deleting_original { background: #bee3f8; color: #2a4365; }
+.badge-trashing_original { background: #bee3f8; color: #2a4365; }
 .badge-transcoding { background: #fefcbf; color: #744210; }
 .badge-complete { background: #c6f6d5; color: #22543d; }
+.badge-skipped { background: #fefcbf; color: #744210; }
 .badge-error { background: #fed7d7; color: #742a2a; }
 
 .progress-bar {

@@ -19,6 +19,7 @@ If quality is a concern, take a backup of the originals elsewhere before optimis
 - **Google Photos Picker** — select specific videos from your Google Photos library using the official Google Photos Picker API
 - **Thumbnails** — optional thumbnail view for images and videos
 - **Video optimisation** — select one or more Drive or Google Photos videos and re-encode them at 720p (configurable) using FFmpeg
+- **Safe replacement** — originals go to the Drive bin, and are only replaced when there's a real saving
 - **Job tracking** — real-time progress display for each transcoding job
 - **Upload summary** — completed optimisations list the original file size, new file size, capture timestamp, and filenames
 - **Pagination** — load more files on demand
@@ -36,7 +37,7 @@ If quality is a concern, take a backup of the originals elsewhere before optimis
 │         localhost:3000               │
 │  • Google OAuth flow                 │
 │  • Drive API (list / download /      │
-│    upload / delete)                  │
+│    upload / trash)                   │
 │  • Photos Picker API (session        │
 │    creation / item retrieval)        │
 │  • Photos Library API (download /    │
@@ -123,6 +124,7 @@ Open `.env` and fill in the values:
 | `TRANSCODE_HEIGHT` | Target video height in pixels (default `720`) |
 | `TRANSCODE_CRF` | FFmpeg CRF quality (default `28`; lower = higher quality) |
 | `TRANSCODE_PRESET` | FFmpeg encoding preset (default `medium`) |
+| `MIN_SAVING_PERCENT` | Minimum size reduction (%) required before an original is replaced (default `10`) |
 
 ## Running with Docker Compose
 
@@ -187,7 +189,9 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
    - The video is downloaded from Drive or Google Photos.
    - FFmpeg re-encodes it at the configured resolution and quality.
    - Embedded metadata is copied onto the optimised MP4.
-   - Drive videos are uploaded back to the same folder in Drive and the original is deleted automatically.
+   - If the optimised copy is not at least `MIN_SAVING_PERCENT` smaller than the original, the job is marked **Skipped** and the original is left untouched (nothing is uploaded or removed).
+   - Otherwise, Drive videos are uploaded back to the same folder in Drive and the original is moved to the Drive bin (restorable for 30 days).
+   - Videos already at or below the target resolution are shown as not optimisable and are never upscaled.
    - Google Photos videos are uploaded back into Google Photos as new items.
    Google Photos items will be stored in an album created for this app, making it easier to locate them.
 8. The **Optimisation Jobs** panel shows real-time progress for each file.

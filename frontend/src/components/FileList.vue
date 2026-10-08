@@ -79,6 +79,9 @@
             <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
               {{ file.name }}
             </a>
+            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
+              {{ file.notOptimisableReason || 'Already ≤720p' }}
+            </span>
           </td>
           <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
           <td class="resolution-cell">{{ fileResolution(file) }}</td>
@@ -89,7 +92,7 @@
       </tbody>
       <tbody v-if="otherFiles.length > 0">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 8 : 7">Other files</td>
+          <td :colspan="showThumbnails ? 8 : 7">Not optimisable</td>
         </tr>
         <tr
           v-for="file in otherFiles"
@@ -126,6 +129,9 @@
             <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
               {{ file.name }}
             </a>
+            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
+              {{ file.notOptimisableReason || 'Already ≤720p' }}
+            </span>
           </td>
           <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
           <td class="resolution-cell">{{ fileResolution(file) }}</td>
@@ -211,7 +217,7 @@ function toggleAll(e) {
 function checkboxTitle(file) {
   if (file.optimisable && file.source === 'photos') return 'Select Google Photos video for optimisation'
   if (file.optimisable) return 'Select Drive video for optimisation'
-  return 'Only video files can be optimised'
+  return file.notOptimisableReason || 'Only video files can be optimised'
 }
 
 function formatSize(bytes) {
@@ -327,6 +333,18 @@ function fileResolution(file) {
 
 .name-cell a:hover {
   text-decoration: underline;
+}
+
+.tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  background: #edf2f7;
+  color: #718096;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .size-cell {
