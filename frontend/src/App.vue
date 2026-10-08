@@ -79,7 +79,15 @@
         />
 
         <div ref="jobStatusAnchor">
-          <JobStatus :jobs="jobList" @clear="clearOptimisationHistory" />
+          <JobStatus
+            :jobs="jobList"
+            :photosAlbumUrl="photosAlbumUrl"
+            :pendingJobIds="pendingJobIds"
+            @clear="clearOptimisationHistory"
+            @cancel="cancelJob"
+            @retry="retryJob"
+            @cleanup="setCleanup"
+          />
         </div>
       </div>
 
@@ -125,6 +133,9 @@ const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
 const jobList = ref([])
+const photosAlbumUrl = ref(null)
+// jobIds with a cancel/retry/cleanup request in flight (disables their buttons)
+const pendingJobIds = ref(new Set())
 const uploadAfterOptimise = ref(true)
 const authError = ref(false)
 const FALLBACK_CONFIG = {
@@ -182,7 +193,7 @@ const jobStatusAnchor = ref(null)
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
 const PHOTO_PICKER_STORAGE_TTL_MS = 60 * 60 * 1000 // 60 minutes
 
-const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error'])
+const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error', 'cancelled'])
 
 function isJobFinished(job) {
   return TERMINAL_STATUSES.has(job.status)
@@ -503,6 +514,7 @@ async function pollJobs() {
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
+    photosAlbumUrl.value = data.photosAlbumUrl || null
     handlePersistedPhotoJobErrors(jobList.value)
     optimising.value = jobList.value.some((j) => !isJobFinished(j))
 
@@ -539,6 +551,48 @@ function stopPolling() {
   }
 }
 
+// POST a per-job action and merge the returned job into the list. Returns the
+// job on success, or null on failure (after showing the server's error).
+async function postJobAction(jobId, action, body = {}) {
+  if (pendingJobIds.value.has(jobId)) return null
+  error.value = null
+  pendingJobIds.value.add(jobId)
+  try {
+    const { data } = await axios.post(
+      `/api/optimise/jobs/${encodeURIComponent(jobId)}/${action}`,
+      body,
+      { withCredentials: true }
+    )
+    if (!data?.job) return null
+    jobList.value = jobList.value.map((j) => (j.jobId === jobId ? { ...j, ...data.job } : j))
+    return data.job
+  } catch (err) {
+    console.error(`Failed to ${action} job`, err)
+    error.value = err.response?.data?.error || `Failed to ${action} job`
+    return null
+  } finally {
+    pendingJobIds.value.delete(jobId)
+  }
+}
+
+// Make sure the list keeps updating after a job changed state.
+function resumePolling() {
+  optimising.value = jobList.value.some((j) => !isJobFinished(j))
+  if (optimising.value) startPolling()
+}
+
+async function cancelJob(jobId) {
+  if (await postJobAction(jobId, 'cancel')) resumePolling()
+}
+
+async function retryJob(jobId) {
+  if (await postJobAction(jobId, 'retry')) resumePolling()
+}
+
+async function setCleanup({ jobId, removed }) {
+  await postJobAction(jobId, 'cleanup', { removed: !!removed })
+}
+
 async function clearOptimisationHistory() {
   error.value = null
   stopPolling()
@@ -568,6 +622,7 @@ async function hydrateJobs() {
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
     jobList.value = data.jobs || []
+    photosAlbumUrl.value = data.photosAlbumUrl || null
     handlePersistedPhotoJobErrors(jobList.value)
     optimising.value = jobList.value.some((j) => !isJobFinished(j))
     if (optimising.value) {

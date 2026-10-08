@@ -195,9 +195,9 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
    - Videos already at or below the target resolution are shown as not optimisable and are never upscaled.
    - Google Photos videos are uploaded back into Google Photos as new items.
    Google Photos items will be stored in an album created for this app, making it easier to locate them.
-8. The **Optimisation Jobs** panel shows real-time progress for each file. If the backend restarts while jobs are in progress, those jobs are marked as errors ("Interrupted by a server restart") so you can select the videos and run them again.
+8. The **Optimisation Jobs** panel shows real-time progress for each file. Use **Cancel** to stop a queued or running job (it can't be cancelled once the upload has started), and **Retry** to re-run a failed or cancelled job. If the backend restarts while jobs are in progress, those jobs are marked as errors ("Interrupted by a server restart"); if one was interrupted during an upload, Retry warns that an optimised copy may already exist, so check before retrying.
 9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
-10. For Google Photos uploads, manually remove the original item in Google Photos to recover storage space.
+10. Google doesn't let apps delete Google Photos items, so completed Google Photos uploads appear in a **cleanup checklist** showing how many originals (and how much space) are still to remove. For each one, use **Search in Google Photos** to find the original, delete it yourself, then tick **Removed**. Your ticks are saved on the server.
 
 ## Project Structure
 
