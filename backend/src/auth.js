@@ -4,7 +4,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const path = require('path');
 const redisClient = require('./redis-client');
-const { getOrCreatePhotosAlbum } = require('./photos-api');
+const { getOrCreatePhotosAlbum, getCachedPhotosAlbumUrl } = require('./photos-api');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const router = express.Router();
@@ -70,6 +70,7 @@ router.get('/google/callback', async (req, res) => {
     try {
       const albumId = await getOrCreatePhotosAlbum(tokens, profile.id, redisClient);
       req.session.photosAlbumId = albumId;
+      req.session.photosAlbumUrl = await getCachedPhotosAlbumUrl(profile.id, redisClient);
       console.log(`[auth] photos album ID saved to session for user ${profile.id}: ${albumId}`);
     } catch (albumErr) {
       console.error('[auth] failed to retrieve or create photos album:', albumErr.message);
@@ -102,6 +103,7 @@ router.get('/status', async (req, res) => {
       try {
         const albumId = await getOrCreatePhotosAlbum(req.session.tokens, req.session.user.id, redisClient);
         req.session.photosAlbumId = albumId;
+        req.session.photosAlbumUrl = await getCachedPhotosAlbumUrl(req.session.user.id, redisClient);
         await new Promise((resolve, reject) => {
           req.session.save((saveErr) => {
             if (saveErr) return reject(saveErr);

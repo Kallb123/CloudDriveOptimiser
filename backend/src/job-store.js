@@ -4,7 +4,7 @@ const redisClient = require('./redis-client');
 
 const JOB_TTL_SECONDS = 24 * 60 * 60;
 const ACTIVE_JOBS_KEY = 'jobs:active';
-const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error']);
+const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error', 'cancelled']);
 const INTERRUPTED_MESSAGE = 'Interrupted by a server restart — please try again';
 const LATE_STAGE_STATUSES = new Set(['uploading', 'trashing_original']);
 const INTERRUPTED_LATE_MESSAGE =
@@ -126,6 +126,8 @@ async function recoverInterruptedJobs({ readyTimeoutMs = 15000 } = {}) {
     job.error = LATE_STAGE_STATUSES.has(job.status)
       ? INTERRUPTED_LATE_MESSAGE
       : INTERRUPTED_MESSAGE;
+    // Remember where it stopped so the UI can explain what may be left behind.
+    job.interruptedStage = job.status;
     job.status = 'error';
     job.downloadAvailable = false;
     delete job.tempOutputPath;
