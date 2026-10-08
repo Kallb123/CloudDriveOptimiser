@@ -23,6 +23,7 @@ const jobs = {};
 const TARGET_HEIGHT = parseInt(process.env.TRANSCODE_HEIGHT || '720', 10);
 const VIDEO_CRF = parseInt(process.env.TRANSCODE_CRF || '28', 10);
 const VIDEO_PRESET = process.env.VIDEO_PRESET || 'medium';
+const MIN_SAVING_PERCENT = parseFloat(process.env.MIN_SAVING_PERCENT || '10');
 const LOG_PREFIX = '[optimise]';
 
 const photosUploadMutex = {
@@ -97,7 +98,12 @@ function getOriginalCreationTime(inputPath) {
  */
 async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
   console.log(`${LOG_PREFIX} transcoding video ${inputPath} to ${outputPath} with target height ${TARGET_HEIGHT} ${shouldUseWidth}`);
-  const scaleArg = shouldUseWidth ? `${TARGET_HEIGHT}:-2` : `-2:${TARGET_HEIGHT}`;
+  // Only ever downscale: min() caps the target at the source dimension, and
+  // trunc(.../2)*2 keeps the result even for libx264. The single quotes stop the
+  // commas inside min() being parsed as filter separators.
+  const scaleArg = shouldUseWidth
+    ? `'trunc(min(${TARGET_HEIGHT},iw)/2)*2':-2`
+    : `-2:'trunc(min(${TARGET_HEIGHT},ih)/2)*2'`;
   const originalDate = await getOriginalCreationTime(inputPath);
   const outputOptions = [
     '-map_metadata 0',
@@ -417,9 +423,12 @@ router.get('/status/:jobId', requireAuth, async (req, res) => {
     sessionId: req.sessionID,
     jobId: req.params.jobId,
   });
-  let job = jobs[req.params.jobId];
+  let job = await loadSessionJobById(req.sessionID, req.params.jobId);
   if (!job) {
-    job = await jobStore.loadJob(req.params.jobId);
+    const memoryJob = jobs[req.params.jobId];
+    if (memoryJob && memoryJob.sessionId === req.sessionID) {
+      job = memoryJob;
+    }
   }
   if (!job) {
     console.warn(`${LOG_PREFIX} status request failed - job not found`, {
@@ -503,6 +512,39 @@ router.get('/download-all', requireAuth, async (req, res) => {
 });
 
 /**
+ * True only when the optimised copy is meaningfully smaller than the original.
+ */
+function hasWorthwhileSaving(originalSize, newSize, minSavingPercent = MIN_SAVING_PERCENT) {
+  if (!(originalSize > 0) || !(newSize > 0)) return false;
+  return newSize <= originalSize * (1 - minSavingPercent / 100);
+}
+
+/**
+ * Mark a job as skipped because the optimised copy is not worth keeping.
+ * Nothing is uploaded and the original is left untouched.
+ */
+async function skipJobWithoutSaving(job) {
+  if (!(job.originalSize > 0) || !(job.newSize > 0)) {
+    job.skipReason = 'Could not determine file sizes to confirm a saving — original kept';
+  } else if (job.newSize >= job.originalSize) {
+    job.skipReason = 'Optimised copy is larger than the original — original kept';
+  } else {
+    const savedPercent = ((job.originalSize - job.newSize) / job.originalSize) * 100;
+    job.skipReason = `Optimised copy would only save ${savedPercent.toFixed(1)}% (minimum ${MIN_SAVING_PERCENT}%) — original kept`;
+  }
+  job.status = 'skipped';
+  job.downloadAvailable = false;
+  job.manualCleanupRequired = false;
+  await jobStore.saveJob(job);
+  console.log(`${LOG_PREFIX} skipping job - no worthwhile saving`, {
+    jobId: job.jobId,
+    originalSize: job.originalSize,
+    newSize: job.newSize,
+    skipReason: job.skipReason,
+  });
+}
+
+/**
  * Core async processing pipeline for a single file optimisation job.
  */
 async function processJob(jobId, item, tokens) {
@@ -522,7 +564,7 @@ async function processJob(jobId, item, tokens) {
     } else {
       await processDriveJob(job, tokens, fileId, inputPath, outputPath);
     }
-    console.log(`${LOG_PREFIX} job complete`, { jobId, newFileId: job.newFileId, uploadedTo: job.uploadedTo });
+    console.log(`${LOG_PREFIX} job finished`, { jobId, status: job.status, newFileId: job.newFileId, uploadedTo: job.uploadedTo });
   } catch (err) {
     job.status = 'error';
     job.error = err.message;
@@ -604,16 +646,24 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     isPortrait: driveOrientationIsPortrait,
   });
 
+  if (!hasWorthwhileSaving(job.originalSize, job.newSize)) {
+    await skipJobWithoutSaving(job);
+    return;
+  }
+
   const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
   if (job.upload) {
     job.status = 'uploading';
+    await jobStore.saveJob(job);
     const uploaded = await uploadFile(drive, outputPath, optimisedName, 'video/quicktime', meta.parents);
 
-    job.status = 'deleting_original';
-    console.log(`${LOG_PREFIX} deleting original Drive file`, { jobId: job.jobId, fileId });
-    await drive.files.delete({ fileId });
-    console.log(`${LOG_PREFIX} original Drive file deleted`, { jobId: job.jobId, fileId });
+    job.status = 'trashing_original';
+    await jobStore.saveJob(job);
+    console.log(`${LOG_PREFIX} moving original Drive file to bin`, { jobId: job.jobId, fileId });
+    await drive.files.update({ fileId, requestBody: { trashed: true } });
+    console.log(`${LOG_PREFIX} original Drive file moved to bin`, { jobId: job.jobId, fileId });
 
+    job.originalTrashed = true;
     job.status = 'complete';
     job.newFileId = uploaded.id;
     job.newFileName = uploaded.name;
@@ -700,6 +750,11 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     isPortrait: photosOrientationIsPortrait,
   });
 
+  if (!hasWorthwhileSaving(job.originalSize, job.newSize)) {
+    await skipJobWithoutSaving(job);
+    return;
+  }
+
   const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
 
   if (job.upload) {
@@ -745,3 +800,4 @@ function buildOptimisedName(originalName, height) {
 
 module.exports = router;
 module.exports.buildOptimisedName = buildOptimisedName;
+module.exports.hasWorthwhileSaving = hasWorthwhileSaving;
