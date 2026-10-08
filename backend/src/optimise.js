@@ -29,6 +29,64 @@ const MAX_CONCURRENT_JOBS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_JOBS
 const MIN_SAVING_PERCENT = parseFloat(process.env.MIN_SAVING_PERCENT || '10');
 const LOG_PREFIX = '[optimise]';
 
+// Choices offered to the user in the "Review & confirm" dialog. The configured
+// default height is always selectable, even if it is not one of the presets.
+const RESOLUTION_OPTIONS = [480, 720, 1080];
+const QUALITY_OPTIONS = [
+  { key: 'smaller', label: 'Smaller file', crf: 30 },
+  { key: 'balanced', label: 'Balanced', crf: 28 },
+  { key: 'quality', label: 'Higher quality', crf: 23 },
+];
+const MIN_CRF = 18;
+const MAX_CRF = 35;
+
+function getResolutionOptions() {
+  return [...new Set([...RESOLUTION_OPTIONS, TARGET_HEIGHT])]
+    .filter((h) => Number.isInteger(h) && h > 0)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Validate the optional per-batch `options` from POST /start.
+ * Returns { options: { targetHeight, crf } } with server defaults filled in for
+ * missing fields, or { error } when a supplied value is invalid.
+ * Numeric strings (e.g. '720') are accepted via Number() coercion, then held to
+ * the same rules as numbers; everything else is rejected.
+ */
+function parseJobOptions(rawOptions) {
+  if (rawOptions === undefined || rawOptions === null) {
+    return { options: { targetHeight: TARGET_HEIGHT, crf: VIDEO_CRF } };
+  }
+  if (typeof rawOptions !== 'object' || Array.isArray(rawOptions)) {
+    return { error: 'options must be an object' };
+  }
+
+  const toNumber = (value) => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && value.trim() !== '') return Number(value);
+    return NaN;
+  };
+  const isMissing = (value) => value === undefined || value === null;
+
+  let targetHeight = TARGET_HEIGHT;
+  if (!isMissing(rawOptions.targetHeight)) {
+    targetHeight = toNumber(rawOptions.targetHeight);
+    if (!getResolutionOptions().includes(targetHeight)) {
+      return { error: `options.targetHeight must be one of: ${getResolutionOptions().join(', ')}` };
+    }
+  }
+
+  let crf = VIDEO_CRF;
+  if (!isMissing(rawOptions.crf)) {
+    crf = toNumber(rawOptions.crf);
+    if (!Number.isInteger(crf) || crf < MIN_CRF || crf > MAX_CRF) {
+      return { error: `options.crf must be an integer between ${MIN_CRF} and ${MAX_CRF}` };
+    }
+  }
+
+  return { options: { targetHeight, crf } };
+}
+
 const photosUploadMutex = {
   current: Promise.resolve(),
 };
@@ -135,23 +193,23 @@ function getOriginalCreationTime(inputPath) {
 
 /**
  * Re-encode the video using ffmpeg.
- * Scales to TARGET_HEIGHT while preserving aspect ratio,
- * encodes with h264 at VIDEO_CRF quality.
+ * Scales to targetHeight while preserving aspect ratio (never upscaling),
+ * encodes with h264 at the given CRF.
  */
-async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress) {
-  console.log(`${LOG_PREFIX} transcoding video ${inputPath} to ${outputPath} with target height ${TARGET_HEIGHT} ${shouldUseWidth}`);
+async function transcodeVideo(inputPath, outputPath, metadata, shouldUseWidth, onProgress, targetHeight = TARGET_HEIGHT, crf = VIDEO_CRF) {
+  console.log(`${LOG_PREFIX} transcoding video ${inputPath} to ${outputPath} with target height ${targetHeight}, crf ${crf} ${shouldUseWidth}`);
   // Only ever downscale: min() caps the target at the source dimension, and
   // trunc(.../2)*2 keeps the result even for libx264. The single quotes stop the
   // commas inside min() being parsed as filter separators.
   const scaleArg = shouldUseWidth
-    ? `'trunc(min(${TARGET_HEIGHT},iw)/2)*2':-2`
-    : `-2:'trunc(min(${TARGET_HEIGHT},ih)/2)*2'`;
+    ? `'trunc(min(${targetHeight},iw)/2)*2':-2`
+    : `-2:'trunc(min(${targetHeight},ih)/2)*2'`;
   const originalDate = await getOriginalCreationTime(inputPath);
   const outputOptions = [
     '-map_metadata 0',
     `-vf scale=${scaleArg}`,
     '-c:v libx264',
-    `-crf ${VIDEO_CRF}`,
+    `-crf ${crf}`,
     `-preset ${VIDEO_PRESET}`,
     '-c:a aac',
     '-b:a 128k',
@@ -352,7 +410,8 @@ function getApiErrorMessage(err, fallbackMessage) {
 
 /**
  * POST /api/optimise/start
- * Body: { fileIds: [string] }
+ * Body: { items: [...], options?: { targetHeight, crf } }
+ * (legacy: { fileIds: [string] })
  *
  * Queues optimisation jobs for the supplied file IDs and returns the job IDs.
  */
@@ -377,6 +436,17 @@ router.post('/start', requireAuth, async (req, res) => {
     });
     return res.status(400).json({ error: 'items must be a non-empty array' });
   }
+
+  const parsedOptions = parseJobOptions(req.body?.options);
+  if (parsedOptions.error) {
+    console.warn(`${LOG_PREFIX} invalid optimisation options`, {
+      sessionId: req.sessionID,
+      options: req.body?.options,
+      error: parsedOptions.error,
+    });
+    return res.status(400).json({ error: parsedOptions.error });
+  }
+  const { targetHeight, crf } = parsedOptions.options;
 
   const albumId = req.session.photosAlbumId || null;
   if (!albumId) {
@@ -408,6 +478,8 @@ router.post('/start', requireAuth, async (req, res) => {
       item,
       source,
       upload,
+      targetHeight,
+      crf,
       status: 'queued',
       progress: 0,
       error: null,
@@ -415,7 +487,7 @@ router.post('/start', requireAuth, async (req, res) => {
 
     jobs[jobId] = job;
     await jobStore.saveJobWithSession(job);
-    queuedJobs.push({ jobId, fileId, source, item });
+    queuedJobs.push({ jobId, fileId, source, item, upload, targetHeight, crf });
   }
 
   const tokens = req.session.tokens;
@@ -431,7 +503,27 @@ router.post('/start', requireAuth, async (req, res) => {
     tokens,
   })));
 
-  return res.json({ jobs: queuedJobs.map(({ jobId, fileId, source, upload }) => ({ jobId, fileId, source, upload })) });
+  return res.json({
+    jobs: queuedJobs.map(({ jobId, fileId, source, upload, targetHeight, crf }) => ({
+      jobId, fileId, source, upload, targetHeight, crf,
+    })),
+  });
+});
+
+/**
+ * GET /api/optimise/config
+ * Server defaults and the choices offered in the Review & confirm dialog.
+ */
+router.get('/config', requireAuth, (req, res) => {
+  return res.json({
+    targetHeight: TARGET_HEIGHT,
+    crf: VIDEO_CRF,
+    preset: VIDEO_PRESET,
+    minSavingPercent: MIN_SAVING_PERCENT,
+    maxConcurrentJobs: MAX_CONCURRENT_JOBS,
+    resolutionOptions: getResolutionOptions(),
+    qualityOptions: QUALITY_OPTIONS,
+  });
 });
 
 /**
@@ -660,6 +752,14 @@ async function processJob(jobId, item, tokens) {
   }
 }
 
+// Jobs persisted before per-batch options existed have no targetHeight/crf.
+function getJobSettings(job) {
+  return {
+    targetHeight: Number.isInteger(job.targetHeight) && job.targetHeight > 0 ? job.targetHeight : TARGET_HEIGHT,
+    crf: Number.isInteger(job.crf) ? job.crf : VIDEO_CRF,
+  };
+}
+
 async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   const drive = getDriveClient(tokens);
 
@@ -688,6 +788,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
   await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} Drive file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
+  const { targetHeight, crf } = getJobSettings(job);
   job.status = 'transcoding';
   job.progress = 0;
   const driveOrientationIsPortrait = await determinePortraitOrientation(inputPath, meta.videoMediaMetadata || {});
@@ -699,7 +800,9 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     (pct) => {
       job.progress = Math.round(pct);
       jobStore.saveJob(job).catch(() => {});
-    }
+    },
+    targetHeight,
+    crf
   );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
@@ -715,7 +818,7 @@ async function processDriveJob(job, tokens, fileId, inputPath, outputPath) {
     return;
   }
 
-  const optimisedName = buildOptimisedName(meta.name, TARGET_HEIGHT);
+  const optimisedName = buildOptimisedName(meta.name, targetHeight);
   if (job.upload) {
     job.status = 'uploading';
     await jobStore.saveJob(job);
@@ -788,6 +891,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
   await jobStore.saveJob(job);
   console.log(`${LOG_PREFIX} Photos file downloaded`, { jobId: job.jobId, originalSize: job.originalSize });
 
+  const { targetHeight, crf } = getJobSettings(job);
   job.status = 'transcoding';
   job.progress = 0;
   await jobStore.saveJob(job);
@@ -803,7 +907,9 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     (pct) => {
       job.progress = Math.round(pct);
       jobStore.saveJob(job).catch(() => {})
-    }
+    },
+    targetHeight,
+    crf
   );
   job.progress = 100;
   job.newSize = getFileSize(outputPath);
@@ -819,7 +925,7 @@ async function processPhotosJob(job, tokens, item, inputPath, outputPath) {
     return;
   }
 
-  const optimisedName = buildOptimisedName(job.originalFileName, TARGET_HEIGHT);
+  const optimisedName = buildOptimisedName(job.originalFileName, targetHeight);
 
   if (job.upload) {
     job.status = 'uploading';
@@ -864,5 +970,6 @@ function buildOptimisedName(originalName, height) {
 
 module.exports = router;
 module.exports.buildOptimisedName = buildOptimisedName;
+module.exports.parseJobOptions = parseJobOptions;
 module.exports.hasWorthwhileSaving = hasWorthwhileSaving;
 module.exports.recoverInterruptedJobs = recoverInterruptedJobs;
