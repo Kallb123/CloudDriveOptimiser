@@ -94,6 +94,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import axios from 'axios'
+import { formatSize } from '../utils/estimate.js'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
@@ -188,18 +189,6 @@ function statusDetail(job) {
   }
   if (job.status === 'trashing_original') return 'Moving original to Drive bin…'
   return ''
-}
-
-function formatSize(bytes) {
-  if (bytes == null) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let val = bytes
-  let i = 0
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024
-    i++
-  }
-  return `${val.toFixed(1)} ${units[i]}`
 }
 
 function formatDateTime(iso) {

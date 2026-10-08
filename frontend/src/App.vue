@@ -55,20 +55,10 @@
               Google Photos Picker
             </button>
           </div>
-          <div class="toggle-group">
-            <label class="toggle btn btn-secondary">
-              <input type="checkbox" v-model="uploadAfterOptimise" />
-              Replace originals with optimised copies
-            </label>
-            <p class="toggle-hint">
-              Drive originals are moved to the bin (restorable for 30 days). Google Photos copies are
-              added alongside the original. Turn off to only download the optimised files.
-            </p>
-          </div>
         </div>
 
-        <div v-if="notices.length" class="notice-list">
-          <div v-for="(notice, index) in notices" :key="notice.id" class="alert alert-info alert-dismissible">
+        <div v-if="visibleNotices.length" class="notice-list">
+          <div v-for="(notice, index) in visibleNotices" :key="notice.id" class="alert alert-info alert-dismissible">
             <span>{{ notice.message }}</span>
             <button class="alert-close" @click="dismissNotice(index)" aria-label="Dismiss notice">×</button>
           </div>
@@ -82,7 +72,8 @@
           :loading="loading"
           :optimising="optimising"
           :nextPageToken="nextPageToken"
-          @optimise="startOptimise"
+          :settings="defaultSettings"
+          @optimise="openConfirm"
           @refresh="analyseFiles"
           @load-more="loadMore"
         />
@@ -91,6 +82,15 @@
           <JobStatus :jobs="jobList" @clear="clearOptimisationHistory" />
         </div>
       </div>
+
+      <!-- Review & confirm Modal -->
+      <OptimiseConfirmModal
+        v-model="confirmModalOpen"
+        v-model:replaceOriginals="uploadAfterOptimise"
+        :files="confirmFiles"
+        :config="config"
+        @confirm="handleConfirm"
+      />
 
       <!-- Photo Picker Modal -->
       <PhotoPickerModal
@@ -106,11 +106,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
 import PhotoPickerModal from './components/PhotoPickerModal.vue'
+import OptimiseConfirmModal from './components/OptimiseConfirmModal.vue'
 
 
 const appVersion = __APP_VERSION__;
@@ -126,6 +127,24 @@ const nextPageToken = ref(null)
 const jobList = ref([])
 const uploadAfterOptimise = ref(true)
 const authError = ref(false)
+const FALLBACK_CONFIG = {
+  targetHeight: 720,
+  crf: 28,
+  minSavingPercent: 10,
+  resolutionOptions: [480, 720, 1080],
+  qualityOptions: [
+    { key: 'smaller', label: 'Smaller file', crf: 30 },
+    { key: 'balanced', label: 'Balanced', crf: 28 },
+    { key: 'quality', label: 'Higher quality', crf: 23 },
+  ],
+}
+const config = ref({ ...FALLBACK_CONFIG })
+const defaultSettings = computed(() => ({
+  targetHeight: config.value.targetHeight,
+  crf: config.value.crf,
+}))
+const confirmModalOpen = ref(false)
+const confirmFiles = ref([])
 const notices = ref([
   {
     id: 'location-loss',
@@ -143,11 +162,18 @@ const notices = ref([
     id: 'account-storage',
     message: 'The optimised videos will take up space on your Google account.',
   },
-  {
-    id: 'min-saving',
-    message: 'Originals are only replaced when the optimised copy is at least 10% smaller; smaller videos are skipped.',
-  },
+  { id: 'min-saving' },
 ])
+const visibleNotices = computed(() =>
+  notices.value.map((notice) =>
+    notice.id === 'min-saving'
+      ? {
+          ...notice,
+          message: `Originals are only replaced when the optimised copy is at least ${config.value.minSavingPercent}% smaller; smaller videos are skipped.`,
+        }
+      : notice
+  )
+)
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
 const jobStatusAnchor = ref(null)
@@ -410,13 +436,34 @@ function handlePhotosSelected(photoFiles) {
 
 // ---- Optimisation ----
 
-async function startOptimise(items) {
+function openConfirm(selectedFiles) {
+  if (!Array.isArray(selectedFiles) || selectedFiles.length === 0) return
+  error.value = null
+  confirmFiles.value = selectedFiles
+  confirmModalOpen.value = true
+}
+
+function handleConfirm(options) {
+  const items = confirmFiles.value.map((file) => {
+    const item = { id: file.id, source: file.source || 'drive' }
+    if (file.source === 'photos' && file.mediaItem) {
+      item.mediaItem = file.mediaItem
+    }
+    return item
+  })
+  startOptimise(items, options)
+}
+
+async function startOptimise(items, options) {
   error.value = null
   optimising.value = true
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
-      { items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })) },
+      {
+        items: items.map((item) => ({ ...item, upload: uploadAfterOptimise.value })),
+        options,
+      },
       { withCredentials: true }
     )
     // Seed job list entries
@@ -500,6 +547,16 @@ async function clearOptimisationHistory() {
 
 // ---- Lifecycle ----
 
+async function loadConfig() {
+  try {
+    const { data } = await axios.get('/api/optimise/config', { withCredentials: true })
+    config.value = { ...FALLBACK_CONFIG, ...data }
+  } catch (err) {
+    console.warn('Failed to load optimise config, using defaults', err?.message || err)
+    config.value = { ...FALLBACK_CONFIG }
+  }
+}
+
 async function hydrateJobs() {
   try {
     const { data } = await axios.get('/api/optimise/status', { withCredentials: true })
@@ -527,7 +584,7 @@ onMounted(async () => {
       files.value = mergeFiles([], persistedPhotos)
       await validatePersistedPhotos(persistedPhotos)
     }
-    await hydrateJobs()
+    await Promise.all([loadConfig(), hydrateJobs()])
     await analyseFiles()
   }
 })
@@ -666,20 +723,6 @@ body {
   font-size: 1.25rem;
   color: #2d3748;
   margin: 0;
-}
-
-.toggle-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.35rem;
-  max-width: 340px;
-}
-
-.toggle-hint {
-  font-size: 0.78rem;
-  line-height: 1.4;
-  color: #718096;
 }
 
 .header-buttons {

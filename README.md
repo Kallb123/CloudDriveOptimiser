@@ -185,10 +185,10 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 3. Click **Analyse library** to fetch your largest Drive files.
 4. (Optional) Click **Select Photos Videos** to open the Google Photos Picker and choose specific videos from your Google Photos library.
 5. Toggle **Show thumbnails** to preview images and videos inline.
-6. Check the boxes next to one or more **video** files from Drive or Google Photos.
-7. Click **Optimise selected** to begin the transcoding pipeline. Selected videos are processed one at a time by default (see `MAX_CONCURRENT_JOBS`); videos waiting for their turn show as **Queued**. For each video:
+6. Check the boxes next to one or more **video** files from Drive or Google Photos. The summary bar above the table shows the total size and an estimated saving for all optimisable videos (and for your selection), and the **Est. saving** column shows an estimate per video. These are rough estimates based on resolution and duration, not guarantees.
+7. Click **Optimise selected** to open the **Review & confirm** dialog. Choose the output **resolution** and **quality** for this batch (defaults come from `TRANSCODE_HEIGHT` and `TRANSCODE_CRF`), check the estimated saving and the list of what will happen to Drive and Google Photos originals, and decide whether to **Replace originals with optimised copies** (turn it off to only download the optimised files). Click **Optimise N videos** to start the transcoding pipeline. Selected videos are processed one at a time by default (see `MAX_CONCURRENT_JOBS`); videos waiting for their turn show as **Queued**. For each video:
    - The video is downloaded from Drive or Google Photos.
-   - FFmpeg re-encodes it at the configured resolution and quality.
+   - FFmpeg re-encodes it at the chosen resolution and quality.
    - Embedded metadata is copied onto the optimised MP4.
    - If the optimised copy is not at least `MIN_SAVING_PERCENT` smaller than the original, the job is marked **Skipped** and the original is left untouched (nothing is uploaded or removed).
    - Otherwise, Drive videos are uploaded back to the same folder in Drive and the original is moved to the Drive bin (restorable for 30 days).
