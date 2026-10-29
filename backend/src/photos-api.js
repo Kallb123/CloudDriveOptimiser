@@ -7,8 +7,6 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
-const REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || `${BACKEND_URL}/auth/google/callback`;
 const PHOTOS_API_BASE_URL = 'https://photoslibrary.googleapis.com/v1';
 const PHOTOS_UPLOAD_URL = `${PHOTOS_API_BASE_URL}/uploads`;
 const PHOTOS_MEDIA_ITEMS_URL = `${PHOTOS_API_BASE_URL}/mediaItems`;
@@ -16,11 +14,7 @@ const PHOTOS_LINK_EXPIRED_MESSAGE =
   'Google Photos download link has expired — re-select this video with the Google Photos picker and run it again';
 
 function createOAuthClient() {
-  return new google.auth.OAuth2(
-    GOOGLE_CLIENT_ID,
-    GOOGLE_CLIENT_SECRET,
-    REDIRECT_URI
-  );
+  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
 }
 
 function getApiErrorMessage(err, fallbackMessage) {

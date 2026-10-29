@@ -11,21 +11,38 @@ const router = express.Router();
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-const REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || `${BACKEND_URL}/auth/google/callback`;
+// Optional overrides. When unset, URLs are derived from the host the browser
+// used, so the same build works on localhost and behind a public HTTPS domain.
+const FRONTEND_URL = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || '';
 
-function createOAuthClient() {
+// Origin as seen by the browser. Relies on `trust proxy` so X-Forwarded-Proto
+// and X-Forwarded-Host from nginx / the Vite dev proxy are honoured.
+function getRequestOrigin(req) {
+  return `${req.protocol}://${req.host}`;
+}
+
+function getRedirectUri(req) {
+  return OAUTH_REDIRECT_URI || `${getRequestOrigin(req)}/auth/google/callback`;
+}
+
+function getFrontendUrl(req) {
+  return FRONTEND_URL || getRequestOrigin(req);
+}
+
+// redirectUri is only needed for the consent/code-exchange steps; API clients
+// built from stored tokens can omit it.
+function createOAuthClient(redirectUri) {
   return new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    REDIRECT_URI
+    redirectUri
   );
 }
 
 // GET /auth/google — redirect user to Google consent screen
-router.get('/google', (_req, res) => {
-  const oAuth2Client = createOAuthClient();
+router.get('/google', (req, res) => {
+  const oAuth2Client = createOAuthClient(getRedirectUri(req));
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
@@ -44,12 +61,13 @@ router.get('/google', (_req, res) => {
 // GET /auth/google/callback — handle OAuth callback
 router.get('/google/callback', async (req, res) => {
   const { code, error } = req.query;
+  const frontendUrl = getFrontendUrl(req);
   if (error || !code) {
     console.error('OAuth callback error:', error || 'No code provided');
-    return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
+    return res.redirect(`${frontendUrl}/?error=auth_failed`);
   }
   try {
-    const oAuth2Client = createOAuthClient();
+    const oAuth2Client = createOAuthClient(getRedirectUri(req));
     console.log('Exchanging code for tokens...');
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
@@ -83,13 +101,13 @@ router.get('/google/callback', async (req, res) => {
     return req.session.save((saveErr) => {
       if (saveErr) {
         console.error('Session save error:', saveErr);
-        return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
+        return res.redirect(`${frontendUrl}/?error=auth_failed`);
       }
-      return res.redirect(`${FRONTEND_URL}/`);
+      return res.redirect(`${frontendUrl}/`);
     });
   } catch (err) {
     console.error('OAuth callback error:', err.message);
-    return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
+    return res.redirect(`${frontendUrl}/?error=auth_failed`);
   }
 });
 

@@ -18,7 +18,9 @@ const optimiseRouter = require('./optimise');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// Only needed when the frontend is served from a different origin than the
+// backend; the nginx and Vite proxies keep everything same-origin.
+const FRONTEND_URL = process.env.FRONTEND_URL;
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const isProd = process.env.NODE_ENV === 'production';
 const { version: VERSION } = require("../package.json");
@@ -28,10 +30,12 @@ app.set('trust proxy', 1);
 
 console.log(`[cloud-drive-optimiser] v${VERSION} starting`);
 
-app.use(cors({
-  origin: FRONTEND_URL,
-  credentials: true,
-}));
+if (FRONTEND_URL) {
+  app.use(cors({
+    origin: FRONTEND_URL,
+    credentials: true,
+  }));
+}
 
 app.use(express.json());
 app.use(cookieParser());
