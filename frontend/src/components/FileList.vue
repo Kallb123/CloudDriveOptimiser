@@ -14,28 +14,36 @@
           placeholder="Filter by filename"
         />
       </label>
+      <label v-if="latestPickAt" class="toggle btn btn-secondary">
+        <input type="checkbox" v-model="onlyLatestPick" />
+        Only latest Google Photos pick ({{ latestPickCount }})
+      </label>
       <button
         class="btn btn-primary"
-        :disabled="selectedFiles.length === 0 || optimising"
+        :disabled="selectedFiles.length === 0 || starting"
         @click="$emit('optimise', selectedFiles)"
       >
-        Optimise selected ({{ selectedFiles.length }})
+        {{ starting ? 'Starting…' : `Optimise selected (${selectedFiles.length})` }}
       </button>
     </div>
 
     <div
-      v-if="optimisableFiles.length > 0"
+      v-if="readyFiles.length > 0 || processedFiles.length > 0"
       class="summary-bar"
       title="Rough estimate based on resolution and duration"
     >
-      <span>
+      <span v-if="readyFiles.length > 0">
         <strong>{{ overall.count }}</strong>
-        optimisable {{ overall.count === 1 ? 'video' : 'videos' }}
+        {{ overall.count === 1 ? 'video' : 'videos' }} ready to optimise
         · {{ formatSize(overall.totalSize) }}
         · est. saving <strong>~{{ formatSize(overall.estimatedSaving) }}</strong>
         <span v-if="overall.unknownCount > 0" class="summary-muted">
           ({{ overall.unknownCount }} without enough info to estimate)
         </span>
+      </span>
+      <span v-else>Nothing left to optimise here.</span>
+      <span v-if="processedFiles.length > 0" class="summary-muted">
+        {{ processedFiles.length }} already processed or in progress
       </span>
       <span v-if="selectedFiles.length > 0" class="summary-selected">
         Selected: <strong>{{ selectedFiles.length }}</strong>
@@ -50,10 +58,22 @@
       No files found. Click <strong>Analyse</strong> to load your files.
     </div>
 
+    <div v-else-if="filteredFiles.length === 0" class="empty">
+      No files match the current filters.
+    </div>
+
     <table v-else class="table">
       <thead>
         <tr>
-          <th><input type="checkbox" @change="toggleAll" :checked="allSelected" /></th>
+          <th>
+            <input
+              type="checkbox"
+              @change="toggleAll"
+              :checked="allSelected"
+              :disabled="readyFiles.length === 0"
+              title="Select all videos ready to optimise"
+            />
+          </th>
           <th v-if="showThumbnails">Thumbnail</th>
           <th>Name</th>
           <th>Size ▼</th>
@@ -64,107 +84,81 @@
           <th>Type</th>
         </tr>
       </thead>
-      <tbody v-if="optimisableFiles.length > 0">
+      <tbody v-for="section in sections" :key="section.key" :class="`section-${section.key}`">
         <tr class="section-heading">
-          <td :colspan="showThumbnails ? 9 : 8">Optimisable videos</td>
+          <td :colspan="columnCount">
+            {{ section.title }} ({{ section.files.length }})
+            <button
+              v-if="section.collapsible"
+              class="section-toggle"
+              @click="toggleSection(section.key)"
+            >
+              {{ isCollapsed(section.key) ? 'Show' : 'Hide' }}
+            </button>
+            <span v-if="section.hint" class="section-hint">{{ section.hint }}</span>
+          </td>
         </tr>
-        <tr
-          v-for="file in optimisableFiles"
-          :key="file.id"
-          :class="{ selected: selectedIds.includes(file.id), 'video-row': file.isVideo }"
-        >
-          <td>
-            <input
-              type="checkbox"
-              :value="file.id"
-              v-model="selectedIds"
-              :disabled="!file.optimisable"
-              :title="checkboxTitle(file)"
-            />
-          </td>
-          <td v-if="showThumbnails" class="thumb-cell">
-            <img
-              v-if="file.source === 'photos' && file.thumbnailLink"
-              :src="file.thumbnailLink"
-              :alt="file.name"
-              class="thumbnail"
-              loading="lazy"
-            />
-            <img
-              v-else-if="file.source !== 'photos' && file.thumbnailLink"
-              :src="`/api/drive/thumbnail/${file.id}`"
-              :alt="file.name"
-              class="thumbnail"
-              loading="lazy"
-            />
-            <span v-else class="no-thumb">—</span>
-          </td>
-          <td class="name-cell">
-            <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
-              {{ file.name }}
-            </a>
-            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
-              {{ file.notOptimisableReason || 'Already ≤720p' }}
-            </span>
-          </td>
-          <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
-          <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
-          <td class="resolution-cell">{{ fileResolution(file) }}</td>
-          <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
-          <td class="source-cell">{{ sourceLabel(file.source) }}</td>
-          <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
-        </tr>
-      </tbody>
-      <tbody v-if="otherFiles.length > 0">
-        <tr class="section-heading">
-          <td :colspan="showThumbnails ? 9 : 8">Not optimisable</td>
-        </tr>
-        <tr
-          v-for="file in otherFiles"
-          :key="file.id"
-          :class="{ selected: selectedIds.includes(file.id), 'video-row': file.isVideo }"
-        >
-          <td>
-            <input
-              type="checkbox"
-              :value="file.id"
-              v-model="selectedIds"
-              :disabled="!file.optimisable"
-              :title="checkboxTitle(file)"
-            />
-          </td>
-          <td v-if="showThumbnails" class="thumb-cell">
-            <img
-              v-if="file.source === 'photos' && file.thumbnailLink"
-              :src="file.thumbnailLink"
-              :alt="file.name"
-              class="thumbnail"
-              loading="lazy"
-            />
-            <img
-              v-else-if="file.source !== 'photos' && file.thumbnailLink"
-              :src="`/api/drive/thumbnail/${file.id}`"
-              :alt="file.name"
-              class="thumbnail"
-              loading="lazy"
-            />
-            <span v-else class="no-thumb">—</span>
-          </td>
-          <td class="name-cell">
-            <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
-              {{ file.name }}
-            </a>
-            <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
-              {{ file.notOptimisableReason || 'Already ≤720p' }}
-            </span>
-          </td>
-          <td class="size-cell">{{file.source === "photos" ? "~" : ""}}{{ formatSize(file.size) }}</td>
-          <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
-          <td class="resolution-cell">{{ fileResolution(file) }}</td>
-          <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
-          <td class="source-cell">{{ sourceLabel(file.source) }}</td>
-          <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
-        </tr>
+        <template v-if="!isCollapsed(section.key)">
+          <tr
+            v-for="file in section.files"
+            :key="fileKey(file.source, file.id)"
+            :class="{
+              selected: selectedIds.includes(file.id),
+              'video-row': file.isVideo,
+              'new-row': isLatestPick(file) && section.key === 'ready',
+            }"
+          >
+            <td>
+              <input
+                type="checkbox"
+                :value="file.id"
+                v-model="selectedIds"
+                :disabled="section.key !== 'ready'"
+                :title="checkboxTitle(file)"
+              />
+            </td>
+            <td v-if="showThumbnails" class="thumb-cell">
+              <img
+                v-if="file.source === 'photos' && file.thumbnailLink"
+                :src="file.thumbnailLink"
+                :alt="file.name"
+                class="thumbnail"
+                loading="lazy"
+              />
+              <img
+                v-else-if="file.source !== 'photos' && file.thumbnailLink"
+                :src="`/api/drive/thumbnail/${file.id}`"
+                :alt="file.name"
+                class="thumbnail"
+                loading="lazy"
+              />
+              <span v-else class="no-thumb">—</span>
+            </td>
+            <td class="name-cell">
+              <a :href="file.webViewLink" target="_blank" rel="noopener noreferrer">
+                {{ file.name }}
+              </a>
+              <span v-if="isLatestPick(file)" class="tag tag-new" title="Added in your latest Google Photos pick">New</span>
+              <span
+                v-if="jobFor(file)"
+                class="tag"
+                :class="`tag-job-${jobFor(file).status}`"
+                :title="jobFor(file).error || ''"
+              >
+                {{ jobLabel(jobFor(file)) }}
+              </span>
+              <span v-if="file.isVideo && file.alreadyOptimised" class="tag">
+                {{ file.notOptimisableReason || 'Already ≤720p' }}
+              </span>
+            </td>
+            <td class="size-cell">{{ sizeLabel(file) }}</td>
+            <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
+            <td class="resolution-cell">{{ fileResolution(file) }}</td>
+            <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
+            <td class="source-cell">{{ sourceLabel(file.source) }}</td>
+            <td class="type-cell">{{ shortMime(file.mimeType) }}</td>
+          </tr>
+        </template>
       </tbody>
     </table>
 
@@ -179,68 +173,158 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { formatSize, estimateSaving, summariseEstimates } from '../utils/estimate.js'
+import { STATUS_LABELS, fileKey, isJobRetryable } from '../utils/jobs.js'
 
 const props = defineProps({
   files: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
-  optimising: { type: Boolean, default: false },
+  // A start request is in flight. Jobs already running don't block queueing more.
+  starting: { type: Boolean, default: false },
   nextPageToken: { type: String, default: null },
   // Default { targetHeight, crf } used for the estimates shown in the list.
   settings: { type: Object, default: () => ({ targetHeight: 720, crf: 28 }) },
+  // Map of fileKey(source, id) -> latest optimisation job for that file.
+  jobsByFile: { type: Map, default: () => new Map() },
 })
 
 const emit = defineEmits(['optimise', 'refresh', 'load-more'])
 
+defineExpose({ selectLatestPick })
+
 const showThumbnails = ref(false)
 const filenameFilter = ref('')
+const onlyLatestPick = ref(false)
 const selectedIds = ref([])
+const collapsedSections = ref(new Set(['processed']))
+
+// Timestamp of the most recent Google Photos pick, or null.
+const latestPickAt = computed(() => {
+  let latest = 0
+  for (const file of props.files) {
+    if (file.source === 'photos' && file.pickedAt > latest) latest = file.pickedAt
+  }
+  return latest || null
+})
+
+const latestPickCount = computed(() => props.files.filter(isLatestPick).length)
+
+watch(latestPickAt, (value) => {
+  if (!value) onlyLatestPick.value = false
+})
 
 const filteredFiles = computed(() => {
   const query = filenameFilter.value.trim().toLowerCase()
-  if (!query) return props.files
-  return props.files.filter((file) => file.name?.toLowerCase().includes(query))
+  return props.files.filter((file) => {
+    if (onlyLatestPick.value && !isLatestPick(file)) return false
+    return !query || file.name?.toLowerCase().includes(query)
+  })
 })
 
-const optimisableFiles = computed(() =>
-  filteredFiles.value
-    .filter((f) => f.optimisable)
-    .sort((a, b) => b.size - a.size)
+const bySizeDesc = (a, b) => (b.size || 0) - (a.size || 0)
+
+// Optimisable files are "ready" unless a job is running for them or has
+// already finished with them (failed/cancelled jobs leave them ready).
+const readyFiles = computed(() =>
+  filteredFiles.value.filter((f) => f.optimisable && !isProcessed(f)).sort(bySizeDesc)
+)
+const processedFiles = computed(() =>
+  filteredFiles.value.filter((f) => f.optimisable && isProcessed(f)).sort(bySizeDesc)
 )
 const otherFiles = computed(() =>
-  filteredFiles.value
-    .filter((f) => !f.optimisable)
-    .sort((a, b) => b.size - a.size)
-)
-const selectedFiles = computed(() =>
-  props.files.filter((file) => file.optimisable && selectedIds.value.includes(file.id))
-)
-const overall = computed(() => summariseEstimates(optimisableFiles.value, props.settings))
-const selection = computed(() => summariseEstimates(selectedFiles.value, props.settings))
-const allSelected = computed(
-  () => optimisableFiles.value.length > 0 && optimisableFiles.value.every((f) => selectedIds.value.includes(f.id))
+  filteredFiles.value.filter((f) => !f.optimisable).sort(bySizeDesc)
 )
 
-watch(
-  () => props.files,
-  (files) => {
-    const availableIds = new Set(files.filter((file) => file.optimisable).map((file) => file.id))
-    selectedIds.value = selectedIds.value.filter((id) => availableIds.has(id))
-  },
-  { deep: true }
+const sections = computed(() =>
+  [
+    { key: 'ready', title: 'Ready to optimise', files: readyFiles.value },
+    {
+      key: 'processed',
+      title: 'Already processed or in progress',
+      files: processedFiles.value,
+      collapsible: true,
+      hint: 'See Optimisation Jobs below for details',
+    },
+    { key: 'other', title: 'Not optimisable', files: otherFiles.value, collapsible: true },
+  ].filter((section) => section.files.length > 0)
 )
+
+const columnCount = computed(() => (showThumbnails.value ? 9 : 8))
+
+const readyIds = computed(() =>
+  new Set(props.files.filter((f) => f.optimisable && !isProcessed(f)).map((f) => f.id))
+)
+const selectedFiles = computed(() =>
+  props.files.filter((file) => readyIds.value.has(file.id) && selectedIds.value.includes(file.id))
+)
+const overall = computed(() => summariseEstimates(readyFiles.value, props.settings))
+const selection = computed(() => summariseEstimates(selectedFiles.value, props.settings))
+const allSelected = computed(
+  () => readyFiles.value.length > 0 && readyFiles.value.every((f) => selectedIds.value.includes(f.id))
+)
+
+// Drop selections for files that left the list or started processing.
+watch(readyIds, (ids) => {
+  const kept = selectedIds.value.filter((id) => ids.has(id))
+  if (kept.length !== selectedIds.value.length) selectedIds.value = kept
+})
+
+function jobFor(file) {
+  return props.jobsByFile.get(fileKey(file.source, file.id)) || null
+}
+
+function isProcessed(file) {
+  const job = jobFor(file)
+  return !!job && !isJobRetryable(job)
+}
+
+function isLatestPick(file) {
+  return !!latestPickAt.value && file.source === 'photos' && file.pickedAt === latestPickAt.value
+}
+
+// Select exactly the ready videos from the latest Google Photos pick.
+function selectLatestPick() {
+  selectedIds.value = props.files
+    .filter((file) => isLatestPick(file) && readyIds.value.has(file.id))
+    .map((file) => file.id)
+}
+
+function isCollapsed(key) {
+  return collapsedSections.value.has(key)
+}
+
+function toggleSection(key) {
+  const next = new Set(collapsedSections.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedSections.value = next
+}
+
+function jobLabel(job) {
+  if (job.status === 'transcoding') return `Transcoding ${job.progress || 0}%`
+  if (job.status === 'complete') return '✓ Optimised'
+  if (job.status === 'skipped') return 'Skipped — no saving'
+  if (job.status === 'error') return 'Last attempt failed'
+  return STATUS_LABELS[job.status] || job.status
+}
 
 function toggleAll(e) {
   if (e.target.checked) {
-    selectedIds.value = optimisableFiles.value.map((f) => f.id)
+    selectedIds.value = readyFiles.value.map((f) => f.id)
   } else {
     selectedIds.value = []
   }
 }
 
 function checkboxTitle(file) {
+  if (file.optimisable && isProcessed(file)) return 'Already processed or in progress'
   if (file.optimisable && file.source === 'photos') return 'Select Google Photos video for optimisation'
   if (file.optimisable) return 'Select Drive video for optimisation'
   return file.notOptimisableReason || 'Only video files can be optimised'
+}
+
+function sizeLabel(file) {
+  if (file.size == null) return '—'
+  return `${file.source === 'photos' ? '~' : ''}${formatSize(file.size)}`
 }
 
 function savingLabel(file) {
@@ -388,6 +472,64 @@ function fileResolution(file) {
   font-size: 0.7rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.tag-new {
+  background: #3182ce;
+  color: white;
+}
+
+.tag-job-queued,
+.tag-job-cancelled { background: #e2e8f0; color: #4a5568; }
+.tag-job-fetching_metadata,
+.tag-job-downloading,
+.tag-job-uploading,
+.tag-job-trashing_original { background: #bee3f8; color: #2a4365; }
+.tag-job-transcoding,
+.tag-job-skipped { background: #fefcbf; color: #744210; }
+.tag-job-complete { background: #c6f6d5; color: #22543d; }
+.tag-job-error { background: #fed7d7; color: #742a2a; }
+
+.table tr.new-row {
+  box-shadow: inset 3px 0 0 #3182ce;
+}
+
+.table tr.section-heading td {
+  background: #edf2f7;
+  font-weight: 600;
+  color: #4a5568;
+  font-size: 0.85rem;
+}
+
+.table tr.section-heading:hover {
+  background: none;
+}
+
+.section-toggle {
+  margin-left: 0.5rem;
+  border: none;
+  background: none;
+  color: #2b6cb0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+}
+
+.section-toggle:hover {
+  text-decoration: underline;
+}
+
+.section-hint {
+  margin-left: 0.75rem;
+  color: #718096;
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+.section-processed .name-cell a,
+.section-processed .size-cell,
+.section-processed .saving-cell {
+  opacity: 0.7;
 }
 
 .size-cell {
