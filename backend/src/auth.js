@@ -11,8 +11,9 @@ const router = express.Router();
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-// Optional overrides. When unset, URLs are derived from the host the browser
-// used, so the same build works on localhost and behind a public HTTPS domain.
+// Optional overrides. When unset, the OAuth callback is derived from the host
+// the browser used and post-login redirects are relative ('/'), so the same
+// build works on localhost and behind a public HTTPS domain.
 const FRONTEND_URL = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
 const OAUTH_REDIRECT_URI = process.env.OAUTH_REDIRECT_URI || '';
 
@@ -26,9 +27,9 @@ function getRedirectUri(req) {
   return OAUTH_REDIRECT_URI || `${getRequestOrigin(req)}/auth/google/callback`;
 }
 
-function getFrontendUrl(req) {
-  return FRONTEND_URL || getRequestOrigin(req);
-}
+// Leftover overrides are the usual cause of post-login redirects to localhost.
+if (FRONTEND_URL) console.log(`[auth] FRONTEND_URL override: ${FRONTEND_URL}`);
+if (OAUTH_REDIRECT_URI) console.log(`[auth] OAUTH_REDIRECT_URI override: ${OAUTH_REDIRECT_URI}`);
 
 // redirectUri is only needed for the consent/code-exchange steps; API clients
 // built from stored tokens can omit it.
@@ -61,10 +62,9 @@ router.get('/google', (req, res) => {
 // GET /auth/google/callback — handle OAuth callback
 router.get('/google/callback', async (req, res) => {
   const { code, error } = req.query;
-  const frontendUrl = getFrontendUrl(req);
   if (error || !code) {
     console.error('OAuth callback error:', error || 'No code provided');
-    return res.redirect(`${frontendUrl}/?error=auth_failed`);
+    return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
   }
   try {
     const oAuth2Client = createOAuthClient(getRedirectUri(req));
@@ -101,13 +101,13 @@ router.get('/google/callback', async (req, res) => {
     return req.session.save((saveErr) => {
       if (saveErr) {
         console.error('Session save error:', saveErr);
-        return res.redirect(`${frontendUrl}/?error=auth_failed`);
+        return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
       }
-      return res.redirect(`${frontendUrl}/`);
+      return res.redirect(`${FRONTEND_URL}/`);
     });
   } catch (err) {
     console.error('OAuth callback error:', err.message);
-    return res.redirect(`${frontendUrl}/?error=auth_failed`);
+    return res.redirect(`${FRONTEND_URL}/?error=auth_failed`);
   }
 });
 

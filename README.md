@@ -242,7 +242,7 @@ CloudDriveOptimiser/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | "Authentication failed" or `redirect_uri_mismatch` after Google login | Redirect URI mismatch | Ensure `<the URL you open the app on>/auth/google/callback` is listed in Google Console |
-| Google login sends you back to `localhost` | Old `FRONTEND_URL` / `OAUTH_REDIRECT_URI` values in `.env` (`BACKEND_URL` is no longer used) | Blank them so the URLs are derived from the browser host |
+| Google login sends you back to `localhost` | A leftover `FRONTEND_URL` / `OAUTH_REDIRECT_URI` (in `.env` or your hosting platform), or a backend container still running an old image/env | The backend logs `[auth] ... override:` at startup if either is set. Remove them, then `docker compose up -d --build` (a plain `restart` does not reload `.env`) |
 | Callback URL is `http://` on an HTTPS site | Outer reverse proxy doesn't send `X-Forwarded-Proto` | Configure it to send `X-Forwarded-Proto: https` |
 | Files list is empty | Required Google APIs not enabled | Enable the Drive API and Google Photos Library API in Google Cloud Console |
 | "Drive files error: Request had insufficient authentication scopes" | OAuth scopes not configured in Google Cloud Console | Ensure all required scopes are added to the OAuth consent screen (see Google Cloud Setup section). Re-authenticate with the application after updating scopes. |
