@@ -14,15 +14,17 @@ export default defineConfig({
     proxy: {
       '/auth': {
         target: process.env.VITE_BACKEND_URL || 'http://localhost:3000',
-        changeOrigin: true,
+        // Keep the browser's Host header so the backend derives the OAuth
+        // callback as http://localhost:5173/auth/google/callback.
+        changeOrigin: false,
       },
       '/api': {
         target: process.env.VITE_BACKEND_URL || 'http://localhost:3000',
-        changeOrigin: true,
+        changeOrigin: false,
       },
       '/csrf-token': {
         target: process.env.VITE_BACKEND_URL || 'http://localhost:3000',
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

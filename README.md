@@ -95,9 +95,11 @@ Inside your project navigate to **APIs & Services → Library** and enable:
 
 1. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
 2. Application type: **Web application**.
-3. Add the following **Authorised redirect URIs** (adjust the host/port if you change defaults):
+3. Add an **Authorised redirect URI** for every URL you open the app on. The app builds the callback from the URL in the browser, so it is that origin plus `/auth/google/callback`:
    ```
-   http://localhost:3000/auth/google/callback
+   http://localhost/auth/google/callback            # Docker Compose (FRONTEND_PORT=80)
+   http://localhost:5173/auth/google/callback       # Vite dev server
+   https://drive.example.com/auth/google/callback   # your HTTPS deployment
    ```
 4. Click **Create**.
 5. Copy the **Client ID** and **Client Secret** — you will need them in the next step.
@@ -116,8 +118,8 @@ Open `.env` and fill in the values:
 |----------|-------------|
 | `GOOGLE_CLIENT_ID` | OAuth Client ID from Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | OAuth Client Secret |
-| `BACKEND_URL` | Public URL of the backend (default `http://localhost:3000`) |
-| `FRONTEND_URL` | Public URL of the frontend (default `http://localhost:80`) |
+| `OAUTH_REDIRECT_URI` | Optional. Overrides the OAuth callback URL (by default derived from the browser URL) |
+| `FRONTEND_URL` | Optional. Only needed when the frontend is on a different origin than the backend (CORS and post-login redirect) |
 | `SESSION_SECRET` | A long random string used to sign session cookies |
 | `FRONTEND_PORT` | Host port for the frontend container (default `80`) |
 | `MAX_FILES` | Maximum number of Drive files to retrieve (default `200`) |
@@ -175,8 +177,7 @@ The Vite dev server proxies `/auth` and `/api` requests to `http://localhost:300
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-> **Note**: When running locally, set `BACKEND_URL=http://localhost:3000` and `FRONTEND_URL=http://localhost:5173` in your `.env`.
-> If you run the frontend through Vite proxy, you can also set `OAUTH_REDIRECT_URI=http://localhost:5173/auth/google/callback` so the OAuth callback stays on the same origin as the browser.
+> **Note**: No URL settings are needed for local development: the OAuth callback is derived as `http://localhost:5173/auth/google/callback`. Make sure that URI is registered in Google Cloud Console.
 
 ## Usage
 
@@ -234,13 +235,15 @@ CloudDriveOptimiser/
 - The Google OAuth access token is stored server-side in the session, never exposed to the browser.
 - Drive thumbnails are proxied through the backend, avoiding token leakage in browser requests.
 - The `.env` file is excluded from version control via `.gitignore`. **Never commit credentials.**
-- In production, place the application behind a reverse proxy with TLS and update `BACKEND_URL` / `FRONTEND_URL` accordingly.
+- In production, place the application behind a reverse proxy with TLS that sets `X-Forwarded-Proto` (and `X-Forwarded-Host` if it rewrites `Host`), and register `https://<your-domain>/auth/google/callback` in Google Cloud Console. No URL settings in `.env` are needed.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| "Authentication failed" after Google login | Redirect URI mismatch | Ensure `BACKEND_URL/auth/google/callback` is listed in Google Console |
+| "Authentication failed" or `redirect_uri_mismatch` after Google login | Redirect URI mismatch | Ensure `<the URL you open the app on>/auth/google/callback` is listed in Google Console |
+| Google login sends you back to `localhost` | Old `FRONTEND_URL` / `OAUTH_REDIRECT_URI` values in `.env` (`BACKEND_URL` is no longer used) | Blank them so the URLs are derived from the browser host |
+| Callback URL is `http://` on an HTTPS site | Outer reverse proxy doesn't send `X-Forwarded-Proto` | Configure it to send `X-Forwarded-Proto: https` |
 | Files list is empty | Required Google APIs not enabled | Enable the Drive API and Google Photos Library API in Google Cloud Console |
 | "Drive files error: Request had insufficient authentication scopes" | OAuth scopes not configured in Google Cloud Console | Ensure all required scopes are added to the OAuth consent screen (see Google Cloud Setup section). Re-authenticate with the application after updating scopes. |
 | Optimisation fails: "not a video" | File MIME type is not `video/*` | Only video files can be optimised |
