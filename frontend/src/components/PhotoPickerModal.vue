@@ -1,38 +1,88 @@
 <!-- PhotoPickerModal.vue — handles Google Photos Picker flow -->
 <template>
-  <div v-if="isOpen" class="modal-overlay" @click="closeModal">
-    <div class="modal-content" @click.stop>
+  <!-- No close on backdrop click: users click back here while the picker is open -->
+  <div v-if="isOpen" class="modal-overlay">
+    <div class="modal-content">
       <div class="modal-header">
-        <h3>Select Videos from Google Photos</h3>
+        <h3>Add videos from Google Photos</h3>
         <button class="close-btn" @click="closeModal" title="Close picker">×</button>
       </div>
 
       <div class="modal-body">
-        <!-- Loading / polling state -->
-        <div v-if="loading" class="loading-state">
+        <ol v-if="!error && !popupBlocked" class="steps">
+          <li
+            v-for="(step, index) in STEPS"
+            :key="step.key"
+            :class="stepClass(index)"
+          >
+            <span class="step-marker">{{ index < currentStepIndex ? '✓' : index + 1 }}</span>
+            <span>{{ step.label }}</span>
+          </li>
+        </ol>
+
+        <!-- Creating the picker session -->
+        <div v-if="phase === 'opening'" class="loading-state">
           <div class="spinner"></div>
-          <p>Opening Google Photos Picker in a secure popup...</p>
-          <p>Please complete your selection in the popup window.</p>
+          <p>Opening Google Photos in a new window…</p>
         </div>
 
-        <!-- Polling status -->
-        <div v-else-if="polling" class="loading-state">
+        <!-- User is choosing items in the popup -->
+        <div v-else-if="phase === 'selecting'" class="loading-state">
           <div class="spinner"></div>
-          <p>Waiting for Google Photos selection to complete...</p>
+          <p class="phase-title">Choose your videos in the Google Photos window, then click <strong>Done</strong>.</p>
+          <p class="phase-hint">
+            This page carries on by itself once you click Done.
+            <template v-if="elapsedSeconds >= 5">Waiting {{ formatElapsed(elapsedSeconds) }}.</template>
+          </p>
+          <p v-if="pickerExpiresAt" class="phase-hint">
+            The selection window expires at {{ formatTime(pickerExpiresAt) }}.
+          </p>
+          <button class="btn btn-secondary" @click="reopenPickerWindow">
+            Can't see it? Reopen Google Photos
+          </button>
+        </div>
+
+        <!-- Listing the selected items -->
+        <div v-else-if="phase === 'fetching'" class="loading-state">
+          <div class="spinner"></div>
+          <p class="phase-title">Getting your selection from Google Photos…</p>
+        </div>
+
+        <!-- Looking up each video's size -->
+        <div v-else-if="phase === 'measuring'" class="loading-state">
+          <p class="phase-title">
+            Checking video sizes: {{ measuredCount }} of {{ measureTotal }}
+          </p>
+          <div
+            class="progress-bar"
+            role="progressbar"
+            :aria-valuenow="measuredCount"
+            aria-valuemin="0"
+            :aria-valuemax="measureTotal"
+          >
+            <div class="progress-fill" :style="{ width: `${measurePercent}%` }"></div>
+          </div>
+          <p class="phase-hint">
+            Google Photos doesn't report file sizes, so each video is checked once.
+            Skipping leaves the sizes and savings estimates blank.
+          </p>
+          <button class="btn btn-secondary" @click="skipMeasuring">
+            Skip and add now
+          </button>
         </div>
 
         <!-- Error state -->
         <div v-if="error" class="error-state">
           <p class="error-message">{{ error }}</p>
           <button class="btn btn-secondary" @click="retry">
-            Retry
+            Start again
           </button>
         </div>
 
         <!-- Fallback open tab button -->
-        <div v-if="popupBlocked && !loading && !polling" class="blocked-state">
+        <div v-if="popupBlocked" class="blocked-state">
           <p>Your browser blocked the popup. Please open the picker in a new tab.</p>
-          <button class="btn btn-primary" @click="openPickerInTab">
+          <button class="btn btn-primary" :disabled="!pickerUri" @click="openPickerInTab">
             Open Picker in New Tab
           </button>
         </div>
@@ -52,7 +102,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import axios from 'axios'
 
 const props = defineProps({
@@ -63,18 +113,44 @@ const emit = defineEmits(['update:modelValue', 'items-selected'])
 
 defineExpose({ openPicker })
 
+const STEPS = [
+  { key: 'selecting', label: 'Choose videos in Google Photos' },
+  { key: 'fetching', label: 'Fetch your selection' },
+  { key: 'measuring', label: 'Check video sizes' },
+]
+const DEFAULT_POLL_MS = 2000
+const MIN_POLL_MS = 1000
+const MAX_POLL_MS = 5000
+// Must match MAX_SIZE_IDS_PER_REQUEST on the backend.
+const SIZE_BATCH = 10
+
 const isOpen = ref(props.modelValue)
-const loading = ref(false)
-const polling = ref(false)
+// '' | 'opening' | 'selecting' | 'fetching' | 'measuring'
+const phase = ref('')
 const popupBlocked = ref(false)
 const error = ref(null)
 const pickerUri = ref(null)
 const sessionId = ref(null)
-const pickerCompleted = ref(false)
-const selectedCount = ref(0)
+const pickerExpiresAt = ref(null)
 const popupWindow = ref(null)
+const elapsedSeconds = ref(0)
+const measuredCount = ref(0)
+const measureTotal = ref(0)
 let pollTimer = null
-let statusPollingActive = false
+let elapsedTimer = null
+// Bumped on every open/close so callbacks from an abandoned run are ignored.
+let runId = 0
+// Set while measuring; resolving it stops waiting for the remaining sizes.
+let skipMeasuringNow = null
+
+const currentStepIndex = computed(() => {
+  if (phase.value === 'opening') return 0
+  return Math.max(0, STEPS.findIndex((step) => step.key === phase.value))
+})
+
+const measurePercent = computed(() =>
+  measureTotal.value > 0 ? Math.round((measuredCount.value / measureTotal.value) * 100) : 0
+)
 
 // Watch for external changes to the modal value
 watch(
@@ -87,68 +163,84 @@ watch(
   }
 )
 
+function stepClass(index) {
+  if (index < currentStepIndex.value) return 'step-done'
+  if (index === currentStepIndex.value) return 'step-active'
+  return ''
+}
+
+function formatElapsed(seconds) {
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+function csrfHeaders() {
+  return { 'x-csrf-token': axios.defaults.headers.common['x-csrf-token'] }
+}
+
+function resetState() {
+  phase.value = ''
+  popupBlocked.value = false
+  error.value = null
+  pickerUri.value = null
+  sessionId.value = null
+  pickerExpiresAt.value = null
+  measuredCount.value = 0
+  measureTotal.value = 0
+  skipMeasuringNow = null
+}
+
+function fail(message, err) {
+  stopTimers()
+  phase.value = ''
+  error.value = err?.response?.data?.error || message
+  console.error('[PhotoPickerModal]', error.value, err)
+}
+
 async function openPicker() {
-  console.log('[PhotoPickerModal] openPicker() starting')
-  try {
-    loading.value = true
-    polling.value = false
-    popupBlocked.value = false
-    error.value = null
-    pickerCompleted.value = false
-    selectedCount.value = 0
+  cleanupPicker()
+  resetState()
+  const run = ++runId
+  phase.value = 'opening'
 
-    if (!isOpen.value) {
-      isOpen.value = true
-      emit('update:modelValue', true)
-      console.log('[PhotoPickerModal] modal opened')
-    }
+  if (!isOpen.value) {
+    isOpen.value = true
+    emit('update:modelValue', true)
+  }
 
-    popupWindow.value = window.open(
-      '',
-      'googlePhotosPicker',
-      'width=900,height=700'
-    )
-
-    if (!popupWindow.value) {
-      loading.value = false
-      popupBlocked.value = true
-      error.value = 'Popup blocked. Please open the picker in a new tab.'
-      console.log('[PhotoPickerModal] popup blocked when opening placeholder window')
-      return
-    }
-
+  // Open the window synchronously (inside the click) so it isn't blocked,
+  // then point it at the picker once the session exists.
+  popupWindow.value = window.open('', 'googlePhotosPicker', 'width=900,height=700')
+  if (!popupWindow.value) {
+    phase.value = ''
+    popupBlocked.value = true
+  } else {
     try {
-      if (popupWindow.value.document) {
-        popupWindow.value.document.write('<p style="font-family: sans-serif; padding: 1rem;">Opening Google Photos Picker…</p>')
-      }
+      popupWindow.value.document.write('<p style="font-family: sans-serif; padding: 1rem;">Opening Google Photos Picker…</p>')
     } catch (_err) {
-      console.warn('[PhotoPickerModal] could not write to popup window placeholder:', _err)
+      // Cross-origin or already navigated; harmless.
     }
+  }
 
-    const { data } = await axios.post(
-      '/api/drive/picker/create-session',
-      {},
-      {
-        headers: {
-          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
-        },
-      }
-    )
-
+  try {
+    const { data } = await axios.post('/api/drive/picker/create-session', {}, { headers: csrfHeaders() })
+    if (run !== runId) return
     pickerUri.value = data.pickerUri
     sessionId.value = data.sessionId
-    console.log('[PhotoPickerModal] picker session created', { sessionId: sessionId.value, pickerUri: pickerUri.value })
-
-    openPickerWindow()
-    loading.value = false
   } catch (err) {
-    loading.value = false
-    error.value =
-      err.response?.data?.error ||
-      err.message ||
-      'Failed to create Google Photos Picker session'
-    console.error('[PhotoPickerModal] Picker creation error:', error.value, err)
+    if (run !== runId) return
+    fail('Failed to create Google Photos Picker session', err)
+    return
   }
+
+  if (popupBlocked.value) return
+  if (!navigatePopup()) return
+  startSelecting(run)
 }
 
 function getPickerUriWithAutoClose() {
@@ -158,194 +250,189 @@ function getPickerUriWithAutoClose() {
     : `${pickerUri.value}/autoclose`
 }
 
-function openPickerWindow() {
-  console.log('[PhotoPickerModal] openPickerWindow()', { pickerUri: getPickerUriWithAutoClose(), existingPopup: !!popupWindow.value })
-  if (!pickerUri.value) {
-    error.value = 'Missing picker URI from backend.'
-    console.error('[PhotoPickerModal] openPickerWindow() missing pickerUri')
-    return
-  }
-
+// Points the already-open popup at the picker, opening a new one if needed.
+function navigatePopup() {
   if (popupWindow.value && !popupWindow.value.closed) {
     try {
       popupWindow.value.location.href = getPickerUriWithAutoClose()
       popupWindow.value.focus()
-      console.log('[PhotoPickerModal] reused existing popup and navigated to pickerUri')
-    } catch (_err) {
-      popupBlocked.value = false
-      error.value = 'Unable to load the picker in the opened popup. Please refresh and try again.'
-      console.error('[PhotoPickerModal] openPickerWindow() navigation failed', _err)
-      return
+      return true
+    } catch (err) {
+      fail('Unable to load the picker in the opened popup. Please try again.', err)
+      return false
     }
-  } else {
-    popupWindow.value = window.open(
-      getPickerUriWithAutoClose(),
-      'googlePhotosPicker',
-      'width=900,height=700'
-    )
-
-    if (!popupWindow.value) {
-      popupBlocked.value = true
-      error.value = 'Popup blocked. Please open the picker in a new tab.'
-      console.error('[PhotoPickerModal] popup blocked when opening pickerUri')
-      return
-    }
-    console.log('[PhotoPickerModal] opened new popup window for pickerUri')
   }
+  popupWindow.value = window.open(getPickerUriWithAutoClose(), 'googlePhotosPicker', 'width=900,height=700')
+  if (!popupWindow.value) {
+    phase.value = ''
+    popupBlocked.value = true
+    return false
+  }
+  return true
+}
 
-  polling.value = true
-  pickerStartedDelayPolling()
+function reopenPickerWindow() {
+  if (!pickerUri.value) return
+  if (popupWindow.value && !popupWindow.value.closed) {
+    popupWindow.value.focus()
+    return
+  }
+  // The picker page may sever our handle to the popup (it then reads as
+  // closed), so open by name: browsers reuse the window where they can.
+  popupWindow.value = window.open(getPickerUriWithAutoClose(), 'googlePhotosPicker', 'width=900,height=700')
+  if (!popupWindow.value) {
+    popupBlocked.value = true
+  }
 }
 
 function openPickerInTab() {
-  console.log('[PhotoPickerModal] openPickerInTab()', { pickerUri: getPickerUriWithAutoClose() })
-  if (!pickerUri.value) {
-    console.warn('[PhotoPickerModal] openPickerInTab() no pickerUri available')
-    return
-  }
-
+  if (!pickerUri.value) return
   popupWindow.value = window.open(getPickerUriWithAutoClose(), '_blank')
+  if (!popupWindow.value) return
   popupBlocked.value = false
   error.value = null
-  if (popupWindow.value) {
-    console.log('[PhotoPickerModal] opened picker in new tab')
-    polling.value = true
-    pickerStartedDelayPolling()
-  } else {
-    popupBlocked.value = true
-    error.value = 'Popup blocked. Please open the picker in a new tab.'
-    console.error('[PhotoPickerModal] openPickerInTab() blocked')
-  }
+  startSelecting(runId)
 }
 
-function pickerStartedDelayPolling() {
-  console.log('[PhotoPickerModal] pickerStartedDelayPolling()')
-  stopStatusPolling()
+function startSelecting(run) {
+  phase.value = 'selecting'
+  elapsedSeconds.value = 0
+  stopTimers()
+  elapsedTimer = setInterval(() => {
+    elapsedSeconds.value++
+  }, 1000)
+  schedulePoll(run, DEFAULT_POLL_MS)
+}
+
+function schedulePoll(run, delay) {
+  if (pollTimer) clearTimeout(pollTimer)
   pollTimer = setTimeout(() => {
-    if (!pickerCompleted.value) {
-      console.log('[PhotoPickerModal] delayed polling started')
-      startStatusPolling()
-    }
-  }, 5000)
-}
-
-function startStatusPolling() {
-  console.log('[PhotoPickerModal] startStatusPolling()')
-  stopStatusPolling()
-  statusPollingActive = true
-  checkPickerStatus()
-}
-
-function scheduleStatusPoll(delay = 2000) {
-  if (pollTimer) return
-  pollTimer = setTimeout(async () => {
     pollTimer = null
-    if (statusPollingActive && !pickerCompleted.value) {
-      await checkPickerStatus()
-    }
+    if (run === runId) checkPickerStatus(run)
   }, delay)
 }
 
-function stopStatusPolling() {
+function stopTimers() {
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
   }
-  statusPollingActive = false
-  console.log('[PhotoPickerModal] stopStatusPolling()')
-}
-
-async function checkPickerStatus() {
-  console.log('[PhotoPickerModal] checkPickerStatus()', {
-    sessionId: sessionId.value,
-    pickerCompleted: pickerCompleted.value,
-  })
-  console.log('[PhotoPickerModal] popupWindow state:', {
-    exists: !!popupWindow.value
-  })
-
-  try {
-    const { data: statusData } = await axios.post(
-      '/api/drive/picker/status',
-      { sessionId: sessionId.value },
-      {
-        headers: {
-          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
-        },
-      }
-    )
-
-    console.log('[PhotoPickerModal] picker status response', statusData)
-    if (!statusData.done) {
-      console.log('[PhotoPickerModal] picker not complete yet', { selectedCount: statusData.selectedCount })
-      if (statusPollingActive && !pickerCompleted.value) {
-        scheduleStatusPoll(2000)
-      }
-      return
-    }
-
-    const { data: itemsData } = await axios.post(
-      '/api/drive/picker/get-items',
-      { sessionId: sessionId.value },
-      {
-        headers: {
-          'x-csrf-token': axios.defaults.headers.common['x-csrf-token'],
-        },
-      }
-    )
-
-    const files = itemsData.files || []
-    selectedCount.value = itemsData.selectedCount || files.length
-    pickerCompleted.value = true
-    polling.value = false
-    stopStatusPolling()
-
-    console.log('[PhotoPickerModal] picker complete, items selected', { selectedCount: selectedCount.value })
-    console.log('[PhotoPickerModal] picker complete, items ', files)
-    emit('items-selected', files)
-    closeModal()
-  } catch (err) {
-    stopStatusPolling()
-    polling.value = false
-    loading.value = false
-    error.value =
-      err.response?.data?.error ||
-      err.message ||
-      'Failed to poll Google Photos Picker status'
-    console.error('[PhotoPickerModal] Picker status error:', error.value, err)
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
   }
 }
 
+async function checkPickerStatus(run) {
+  let statusData
+  try {
+    ;({ data: statusData } = await axios.post(
+      '/api/drive/picker/status',
+      { sessionId: sessionId.value },
+      { headers: csrfHeaders() }
+    ))
+  } catch (err) {
+    if (run !== runId) return
+    fail('Lost contact with the Google Photos picker. It may have expired — please start again.', err)
+    return
+  }
+  if (run !== runId) return
+
+  if (statusData.expireTime) pickerExpiresAt.value = new Date(statusData.expireTime)
+
+  if (!statusData.done) {
+    const interval = Math.min(MAX_POLL_MS, Math.max(MIN_POLL_MS, statusData.pollIntervalMs || DEFAULT_POLL_MS))
+    schedulePoll(run, interval)
+    return
+  }
+
+  stopTimers()
+  await collectSelection(run)
+}
+
+async function collectSelection(run) {
+  phase.value = 'fetching'
+  let files
+  try {
+    const { data } = await axios.post(
+      '/api/drive/picker/get-items',
+      { sessionId: sessionId.value },
+      { headers: csrfHeaders() }
+    )
+    files = data.files || []
+  } catch (err) {
+    if (run !== runId) return
+    fail('Failed to fetch your selection from Google Photos', err)
+    return
+  }
+  if (run !== runId) return
+
+  const skipped = new Promise((resolve) => {
+    skipMeasuringNow = resolve
+  })
+  await Promise.race([measureVideoSizes(run, files), skipped])
+  skipMeasuringNow = null
+  if (run !== runId) return
+
+  emit('items-selected', files)
+  closeModal()
+}
+
+// Fills in file.size for picked videos that can be optimised (the others only
+// need listing), a batch at a time so progress shows. A failed batch leaves
+// those sizes unknown rather than failing the pick.
+async function measureVideoSizes(run, files) {
+  const videos = files.filter((file) => file.optimisable && file.size == null)
+  if (videos.length === 0) return
+
+  phase.value = 'measuring'
+  measureTotal.value = videos.length
+  measuredCount.value = 0
+
+  for (let i = 0; i < videos.length; i += SIZE_BATCH) {
+    if (run !== runId || !skipMeasuringNow) return
+    const batch = videos.slice(i, i + SIZE_BATCH)
+    try {
+      const { data } = await axios.post(
+        '/api/drive/picker/sizes',
+        { ids: batch.map((file) => file.id) },
+        { headers: csrfHeaders() }
+      )
+      // Skipped meanwhile: the files have already been handed over.
+      if (run !== runId || !skipMeasuringNow) return
+      for (const file of batch) {
+        const size = data.sizes?.[file.id]
+        if (typeof size === 'number' && size > 0) file.size = size
+      }
+    } catch (err) {
+      console.warn('[PhotoPickerModal] could not read video sizes', err?.message || err)
+    }
+    if (run !== runId) return
+    measuredCount.value = Math.min(videos.length, i + batch.length)
+  }
+}
+
+function skipMeasuring() {
+  skipMeasuringNow?.()
+}
+
 function retry() {
-  console.log('[PhotoPickerModal] retry()')
-  cleanupPicker()
-  error.value = null
-  pickerUri.value = null
-  pickerCompleted.value = false
-  selectedCount.value = 0
   openPicker()
 }
 
 function cleanupPicker() {
-  console.log('[PhotoPickerModal] cleanupPicker()')
-  stopStatusPolling()
+  runId++
+  stopTimers()
   if (popupWindow.value && !popupWindow.value.closed) {
     popupWindow.value.close()
-    console.log('[PhotoPickerModal] closed popup window')
   }
   popupWindow.value = null
 }
 
 function closeModal() {
-  console.log('[PhotoPickerModal] closeModal()')
   isOpen.value = false
   cleanupPicker()
-  pickerUri.value = null
-  sessionId.value = null
-  pickerCompleted.value = false
-  error.value = null
-  popupBlocked.value = false
-  selectedCount.value = 0
+  resetState()
   emit('update:modelValue', false)
 }
 
@@ -481,6 +568,79 @@ onUnmounted(() => {
 .selection-summary {
   color: #2d3748;
   font-size: 1.1rem;
+}
+
+.steps {
+  list-style: none;
+  display: flex;
+  gap: 0.5rem 1.25rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: #a0aec0;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.step-marker {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.steps .step-active {
+  color: #2b6cb0;
+  font-weight: 600;
+}
+
+.steps .step-done {
+  color: #38a169;
+}
+
+.phase-title {
+  color: #2d3748;
+  font-size: 1rem;
+  max-width: 28rem;
+}
+
+.phase-hint {
+  color: #718096;
+  font-size: 0.85rem;
+  max-width: 28rem;
+}
+
+.progress-bar {
+  width: 100%;
+  max-width: 24rem;
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #3182ce;
+  transition: width 0.3s ease;
+}
+
+.blocked-state {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
 }
 
 .modal-footer {

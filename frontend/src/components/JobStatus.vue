@@ -211,6 +211,7 @@
 import { ref, computed } from 'vue'
 import axios from 'axios'
 import { formatSize } from '../utils/estimate.js'
+import { STATUS_LABELS, TERMINAL_STATUSES } from '../utils/jobs.js'
 
 const props = defineProps({
   jobs: { type: Array, default: () => [] },
@@ -222,7 +223,6 @@ const emit = defineEmits(['clear', 'cancel', 'retry', 'cleanup'])
 
 const downloadError = ref(null)
 
-const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error', 'cancelled'])
 const CANCELLABLE_STATUSES = new Set(['queued', 'fetching_metadata', 'downloading', 'transcoding'])
 const RETRYABLE_STATUSES = new Set(['error', 'cancelled'])
 // Stages after which a retry could duplicate an upload.
@@ -338,18 +338,6 @@ async function downloadAll() {
   }
 }
 
-const STATUS_LABELS = {
-  queued: 'Queued',
-  fetching_metadata: 'Fetching info',
-  downloading: 'Downloading',
-  transcoding: 'Transcoding',
-  uploading: 'Uploading',
-  trashing_original: 'Moving original to bin',
-  complete: 'Complete',
-  skipped: 'Skipped',
-  error: 'Error',
-  cancelled: 'Cancelled',
-}
 
 function statusLabel(status) {
   return STATUS_LABELS[status] || status

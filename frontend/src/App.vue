@@ -52,27 +52,45 @@
               class="btn btn-primary"
               @click="openPhotoPicker"
             >
-              Google Photos Picker
+              Add from Google Photos
             </button>
           </div>
         </div>
 
-        <div v-if="visibleNotices.length" class="notice-list">
-          <div v-for="(notice, index) in visibleNotices" :key="notice.id" class="alert alert-info alert-dismissible">
-            <span>{{ notice.message }}</span>
-            <button class="alert-close" @click="dismissNotice(index)" aria-label="Dismiss notice">×</button>
+        <div v-if="!noticesDismissed" class="alert alert-info notice-panel">
+          <div>
+            <strong>Before you optimise</strong>
+            <ul class="notice-list">
+              <li v-for="notice in visibleNotices" :key="notice.id">{{ notice.message }}</li>
+            </ul>
           </div>
+          <button class="btn btn-sm btn-secondary" @click="dismissNotices">Got it</button>
+        </div>
+
+        <div v-if="pickSummary" class="alert alert-success alert-dismissible" role="status">
+          <span>{{ pickSummary }}</span>
+          <button class="alert-close" @click="pickSummary = null" aria-label="Dismiss">×</button>
         </div>
 
         <div v-if="error" class="alert alert-error">{{ error }}</div>
 
+        <div v-if="backupCheck.enabled && backupCheck.error" class="alert alert-warning" role="alert">
+          <span>Duplicati backup check: {{ backupCheck.error }}</span>
+          <button class="btn btn-sm btn-secondary" @click="recheckBackups">Retry</button>
+        </div>
+
         <FileList
           v-if="analysed"
+          ref="fileListRef"
           :files="files"
           :loading="loading"
-          :optimising="optimising"
+          :starting="startingOptimise"
           :nextPageToken="nextPageToken"
           :settings="defaultSettings"
+          :jobsByFile="jobsByFile"
+          :backupEnabled="backupCheck.enabled"
+          :backupResults="backupResults"
+          @recheck-backups="recheckBackups"
           @optimise="openConfirm"
           @refresh="analyseFiles"
           @load-more="loadMore"
@@ -97,6 +115,8 @@
         v-model:replaceOriginals="uploadAfterOptimise"
         :files="confirmFiles"
         :config="config"
+        :backupEnabled="backupCheck.enabled"
+        :backupResults="backupResults"
         @confirm="handleConfirm"
       />
 
@@ -114,12 +134,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
 import PhotoPickerModal from './components/PhotoPickerModal.vue'
 import OptimiseConfirmModal from './components/OptimiseConfirmModal.vue'
+import { isJobFinished, isJobRetryable, latestJobByFile, fileKey } from './utils/jobs.js'
 
 
 const appVersion = __APP_VERSION__;
@@ -129,6 +150,7 @@ const user = ref(null)
 const files = ref([])
 const loading = ref(false)
 const optimising = ref(false)
+const startingOptimise = ref(false)
 const analysed = ref(false)
 const error = ref(null)
 const nextPageToken = ref(null)
@@ -136,6 +158,13 @@ const jobList = ref([])
 // Bumped whenever jobList is changed locally (POST results); a status GET that
 // started before the bump is stale and must not overwrite the newer state.
 let jobsVersion = 0
+const jobsByFile = computed(() => latestJobByFile(jobList.value))
+// Duplicati lookup: whether it's configured, and file name -> lookup state
+// (see utils/backup.js). Names are looked up once, as videos appear.
+const backupCheck = ref({ enabled: false, backups: [], error: null })
+const backupResults = ref(new Map())
+const BACKUP_CHECK_BATCH = 100
+let backupCheckRunning = false
 const photosAlbumUrl = ref(null)
 // jobIds with a cancel/retry/cleanup request in flight (disables their buttons)
 const pendingJobIds = ref(new Set())
@@ -160,7 +189,7 @@ const defaultSettings = computed(() => ({
 }))
 const confirmModalOpen = ref(false)
 const confirmFiles = ref([])
-const notices = ref([
+const notices = [
   {
     id: 'location-loss',
     message: 'Location data will be lost as Google Photos strips it before the download.',
@@ -178,9 +207,12 @@ const notices = ref([
     message: 'The optimised videos will take up space on your Google account.',
   },
   { id: 'min-saving' },
-])
+]
+const NOTICES_DISMISSED_KEY = 'cdo:notices-dismissed'
+const noticesDismissed = ref(readNoticesDismissed())
+const pickSummary = ref(null)
 const visibleNotices = computed(() =>
-  notices.value.map((notice) =>
+  notices.map((notice) =>
     notice.id === 'min-saving'
       ? {
           ...notice,
@@ -191,16 +223,13 @@ const visibleNotices = computed(() =>
 )
 const pickerModalOpen = ref(false)
 const photoPickerRef = ref(null)
+const fileListRef = ref(null)
 const jobStatusAnchor = ref(null)
 
 const PHOTO_PICKER_STORAGE_KEY_PREFIX = 'cdo:photo-picker-files'
+// Picker download links expire after about an hour, so each picked item is
+// kept for that long after it was (last) picked.
 const PHOTO_PICKER_STORAGE_TTL_MS = 60 * 60 * 1000 // 60 minutes
-
-const TERMINAL_STATUSES = new Set(['complete', 'skipped', 'error', 'cancelled'])
-
-function isJobFinished(job) {
-  return TERMINAL_STATUSES.has(job.status)
-}
 
 let pollTimer = null
 let pollingActive = false
@@ -230,12 +259,14 @@ function loadPersistedPhotoFiles() {
       return []
     }
 
-    if (Date.now() - savedAt > PHOTO_PICKER_STORAGE_TTL_MS) {
+    const now = Date.now()
+    const fresh = photoFiles.filter(
+      (file) => file && now - (file.pickedAt || savedAt) <= PHOTO_PICKER_STORAGE_TTL_MS
+    )
+    if (fresh.length === 0) {
       clearPersistedPhotoFiles()
-      return []
     }
-
-    return photoFiles
+    return fresh
   } catch {
     clearPersistedPhotoFiles()
     return []
@@ -329,8 +360,21 @@ function isAuthorisationErrorString(message) {
   return /auth|authorisation|authorization|expired|permission/.test(String(message).toLowerCase())
 }
 
-function dismissNotice(index) {
-  notices.value.splice(index, 1)
+function readNoticesDismissed() {
+  try {
+    return localStorage.getItem(NOTICES_DISMISSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function dismissNotices() {
+  noticesDismissed.value = true
+  try {
+    localStorage.setItem(NOTICES_DISMISSED_KEY, '1')
+  } catch {
+    // Not remembered across reloads; nothing else to do.
+  }
 }
 
 async function validatePersistedPhotos(photoFiles) {
@@ -394,6 +438,8 @@ async function logout() {
   user.value = null
   files.value = []
   analysed.value = false
+  pickSummary.value = null
+  backupResults.value = new Map()
   jobList.value = []
   jobsVersion++
   stopPolling()
@@ -443,11 +489,50 @@ function openPhotoPicker() {
   photoPickerRef.value?.openPicker()
 }
 
-function handlePhotosSelected(photoFiles) {
-  // Add selected photo files to the file list and persist them
-  files.value = mergeFiles([...files.value, ...photoFiles], [])
+async function handlePhotosSelected(photoFiles) {
+  if (!Array.isArray(photoFiles) || photoFiles.length === 0) {
+    pickSummary.value = 'Nothing was selected in Google Photos.'
+    return
+  }
+
+  // Stamp this pick so the list can mark it as new. A re-picked item replaces
+  // the stored copy, refreshing its (short-lived) download link.
+  const pickedAt = Date.now()
+  const picked = photoFiles.map((file) => ({ ...file, pickedAt }))
+  const pickedKeys = new Set(picked.map((file) => fileKey('photos', file.id)))
+  const alreadyListed = files.value.filter((file) => pickedKeys.has(fileKey(file.source, file.id))).length
+  files.value = mergeFiles(
+    files.value.filter((file) => !pickedKeys.has(fileKey(file.source, file.id))),
+    picked
+  )
   savePersistedPhotoFiles()
-  console.log('Added', photoFiles.length, 'photos from picker to file list')
+
+  pickSummary.value = describePick(picked, alreadyListed)
+
+  await nextTick()
+  fileListRef.value?.selectLatestPick()
+}
+
+function describePick(picked, alreadyListed) {
+  let ready = 0
+  let processed = 0
+  let notOptimisable = 0
+  for (const file of picked) {
+    const job = jobsByFile.value.get(fileKey('photos', file.id))
+    if (!file.optimisable) notOptimisable++
+    else if (job && !isJobRetryable(job)) processed++
+    else ready++
+  }
+
+  const total = picked.length
+  const parts = [`Added ${total} ${total === 1 ? 'item' : 'items'} from Google Photos`]
+  const details = []
+  if (ready > 0) details.push(`${ready} ready to optimise and selected (marked New)`)
+  if (processed > 0) details.push(`${processed} already processed`)
+  if (notOptimisable > 0) details.push(`${notOptimisable} not optimisable`)
+  if (alreadyListed > 0) details.push(`${alreadyListed} were already in the list`)
+  if (details.length) parts.push(details.join(', '))
+  return `${parts.join(': ')}.`
 }
 
 // ---- Optimisation ----
@@ -479,6 +564,7 @@ function handleConfirm({ targetHeight, crf, changed } = {}) {
 async function startOptimise(items, options) {
   error.value = null
   optimising.value = true
+  startingOptimise.value = true
   try {
     const { data } = await axios.post(
       '/api/optimise/start',
@@ -489,17 +575,19 @@ async function startOptimise(items, options) {
       { withCredentials: true }
     )
     // Seed job list entries
+    const createdAt = Date.now()
     const newJobs = data.jobs.map(({ jobId, fileId, source, upload }) => ({
       jobId,
       fileId,
       source,
+      createdAt,
       status: 'queued',
       progress: 0,
       error: null,
       fileName: null,
       upload,
     }))
-    jobList.value = [...jobList.value, ...newJobs]
+    jobList.value = [...jobList.value, ...withFileNames(newJobs)]
     jobsVersion++
     startPolling()
 
@@ -510,7 +598,9 @@ async function startOptimise(items, options) {
   } catch (err) {
     console.error('Failed to start optimisation', err)
     error.value = err.response?.data?.error || 'Failed to start optimisation'
-    optimising.value = false
+    optimising.value = jobList.value.some((j) => !isJobFinished(j))
+  } finally {
+    startingOptimise.value = false
   }
 }
 
@@ -522,7 +612,7 @@ async function pollJobs() {
     // A job action landed while this request was in flight: drop the stale
     // response and let the next poll pick up the current state.
     if (version === jobsVersion) {
-      jobList.value = data.jobs || []
+      jobList.value = withFileNames(data.jobs || [])
       photosAlbumUrl.value = data.photosAlbumUrl || null
       handlePersistedPhotoJobErrors(jobList.value)
       optimising.value = jobList.value.some((j) => !isJobFinished(j))
@@ -586,6 +676,15 @@ async function postJobAction(jobId, action, body = {}) {
   }
 }
 
+// The server only learns a file's name once a job reads its metadata; until
+// then show the name from the file list rather than a raw ID.
+function withFileNames(jobs) {
+  const names = new Map(files.value.map((file) => [fileKey(file.source, file.id), file.name]))
+  return jobs.map((job) =>
+    job.fileName ? job : { ...job, fileName: names.get(fileKey(job.source, job.fileId)) || null }
+  )
+}
+
 // Make sure the list keeps updating after a job changed state.
 function resumePolling() {
   optimising.value = jobList.value.some((j) => !isJobFinished(j))
@@ -620,6 +719,64 @@ async function clearOptimisationHistory() {
   }
 }
 
+// ---- Duplicati backup check ----
+
+async function loadBackupCheckStatus() {
+  try {
+    const { data } = await axios.get('/api/backup-check/status', { withCredentials: true })
+    backupCheck.value = { enabled: !!data.enabled, backups: data.backups || [], error: data.error || null }
+  } catch (err) {
+    console.warn('Failed to load backup check status', err?.message || err)
+    backupCheck.value = { enabled: false, backups: [], error: null }
+  }
+}
+
+function setBackupEntries(names, entryFor) {
+  const next = new Map(backupResults.value)
+  for (const name of names) next.set(name, entryFor(name))
+  backupResults.value = next
+}
+
+// Looks up every optimisable video whose name hasn't been checked yet. Files
+// added while this runs are picked up by the next loop iteration.
+async function checkBackups({ refresh = false } = {}) {
+  if (!backupCheck.value.enabled || backupCheckRunning) return
+  backupCheckRunning = true
+  try {
+    for (;;) {
+      const names = [...new Set(files.value.filter((file) => file.optimisable).map((file) => file.name))]
+        .filter((name) => name && !/[/\\]/.test(name) && (!backupResults.value.has(name) || backupResults.value.get(name).stale))
+        .slice(0, BACKUP_CHECK_BATCH)
+      if (names.length === 0) break
+
+      setBackupEntries(names, () => ({ checking: true }))
+      try {
+        const { data } = await axios.post('/api/backup-check', { names, refresh }, { withCredentials: true })
+        setBackupEntries(names, (name) => ({ matches: data.results?.[name] || [] }))
+      } catch (err) {
+        const message = err.response?.data?.error || 'Duplicati lookup failed'
+        setBackupEntries(names, () => ({ error: message }))
+        backupCheck.value = { ...backupCheck.value, error: message }
+        break
+      }
+    }
+  } finally {
+    backupCheckRunning = false
+  }
+}
+
+async function recheckBackups() {
+  if (backupCheckRunning) return
+  // Show every row as checking straight away; stale entries are looked up again.
+  const stale = new Map()
+  for (const name of backupResults.value.keys()) stale.set(name, { checking: true, stale: true })
+  backupResults.value = stale
+  await loadBackupCheckStatus()
+  await checkBackups({ refresh: true })
+}
+
+watch(files, () => checkBackups())
+
 // ---- Lifecycle ----
 
 async function loadConfig() {
@@ -641,7 +798,7 @@ async function hydrateJobs() {
       if (jobList.value.some((j) => !isJobFinished(j))) startPolling()
       return
     }
-    jobList.value = data.jobs || []
+    jobList.value = withFileNames(data.jobs || [])
     photosAlbumUrl.value = data.photosAlbumUrl || null
     handlePersistedPhotoJobErrors(jobList.value)
     optimising.value = jobList.value.some((j) => !isJobFinished(j))
@@ -666,7 +823,7 @@ onMounted(async () => {
       files.value = mergeFiles([], persistedPhotos)
       await validatePersistedPhotos(persistedPhotos)
     }
-    await Promise.all([loadConfig(), hydrateJobs()])
+    await Promise.all([loadConfig(), hydrateJobs(), loadBackupCheckStatus()])
     await analyseFiles()
   }
 })
@@ -829,6 +986,28 @@ body {
   background: #ebf8ff;
   color: #2a4365;
   border: 1px solid #bee3f8;
+}
+
+.alert-success {
+  background: #f0fff4;
+  color: #22543d;
+  border: 1px solid #c6f6d5;
+}
+
+.notice-panel {
+  align-items: center;
+}
+
+.notice-list {
+  margin: 0.35rem 0 0 1.1rem;
+  line-height: 1.5;
+}
+
+.alert-warning {
+  background: #fffaf0;
+  color: #7b341e;
+  border: 1px solid #feebc8;
+  align-items: center;
 }
 
 .alert-error {

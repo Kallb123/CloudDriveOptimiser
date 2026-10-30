@@ -42,76 +42,39 @@ function parseDurationSeconds(duration) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
-async function getVideoFileSizeOld(baseUrl) {
-  try {
-    // Append '=dv' to the baseUrl to request the raw video bytes, 
-    // rather than the default thumbnail image.
-    const videoUrl = `${baseUrl}=dv`; 
-    
-    // Make a HEAD request instead of a GET request
-    const response = await axios.head(videoUrl);
-    
-    // Extract the size from the Content-Length header
-    const bytes = response.headers['content-length'];
-    const megabytes = (bytes / (1024 * 1024)).toFixed(2);
-    
-    console.log(`Video size: ${megabytes} MB`);
-    return bytes;
-  } catch (error) {
-    console.error('Failed to fetch file size:', error.message);
-  }
-}
+const PHOTO_SIZE_TIMEOUT_MS = 20000;
 
+// Total byte size of a Google Photos video, or null when it can't be read.
 async function getVideoFileSize(baseUrl, accessToken) {
+  if (!baseUrl) return null;
+  let response;
   try {
-    const videoUrl = `${baseUrl}=dv`;
-    
-    const response = await axios.get(videoUrl, {
+    response = await axios.get(`${baseUrl}=dv`, {
       headers: {
         Authorization: 'Bearer ' + accessToken,
         // Ask for only the first byte of the file
-        'Range': 'bytes=0-0' 
-      }
+        Range: 'bytes=0-0',
+      },
+      // Streamed so a server that ignores Range doesn't buffer the whole video
+      responseType: 'stream',
+      timeout: PHOTO_SIZE_TIMEOUT_MS,
     });
-    
-    // The server responds with a header like: "bytes 0-0/15432098"
-    const contentRange = response.headers['content-range'];
-    
-    if (contentRange) {
-      // Split the string to extract the total size after the slash
-      const totalBytes = parseInt(contentRange.split('/')[1], 10);
-      const megabytes = (totalBytes / (1024 * 1024)).toFixed(2);
-      
-      console.log(`Video size: ${megabytes} MB`);
-      return totalBytes;
-    }
-
-    // Fallback just in case the server ignored the Range header
-    return parseInt(response.headers['content-length'], 10);
-
   } catch (error) {
     console.error(
-      'Failed to fetch file size:', 
-      error.response?.status, 
+      'Failed to fetch file size:',
+      error.response?.status,
       error.response?.statusText || error.message
     );
+    return null;
   }
-}
+  response.data.destroy();
 
-async function estimatePhotoSize(mediaItem, accessToken) {
-  const mediaFile = mediaItem.mediaFile || mediaItem;
-  const metadata = mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
-  const width = parseInt(metadata.width || '0', 10);
-  const height = parseInt(metadata.height || '0', 10);
-  const pixelCount = width > 0 && height > 0 ? width * height : 0;
-  const mimeType = mediaFile.mimeType || mediaItem.mimeType || '';
-  const isVideo = mediaItem.type === 'VIDEO' || mimeType.startsWith('video/');
-
-  if (isVideo) {
-    return await getVideoFileSize(mediaFile.baseUrl || mediaItem.baseUrl || '', accessToken);
-  }
-
-  return pixelCount;
+  // The server responds with a header like: "bytes 0-0/15432098"
+  const contentRange = response.headers['content-range'];
+  const totalBytes = contentRange
+    ? parseInt(String(contentRange).split('/')[1], 10)
+    : parseInt(response.headers['content-length'], 10);
+  return Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : null;
 }
 
 // Returns why a file can't be optimised, or null if it can. The short side is
@@ -161,7 +124,9 @@ function ensurePhotoThumbnailMap(session) {
   return session.photoThumbnailUrls;
 }
 
-async function mapPhotoMediaItem(mediaItem, accessToken, session) {
+// Maps a Picker media item for the file list. Video sizes need one request each
+// to Google, so they are left null here and filled in via /picker/sizes.
+function mapPhotoMediaItem(mediaItem, session) {
   const mediaFile = mediaItem.mediaFile || mediaItem;
   const metadata = mediaFile.mediaFileMetadata || mediaItem.mediaMetadata || {};
   const width = parseInt(metadata.width || '0', 10);
@@ -183,7 +148,7 @@ async function mapPhotoMediaItem(mediaItem, accessToken, session) {
   return {
     id: mediaItem.id,
     name: mediaFile.filename || mediaItem.filename || mediaItem.name || mediaItem.id,
-    size: await estimatePhotoSize(mediaItem, accessToken),
+    size: null,
     mimeType,
     createdTime: mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
     modifiedTime: mediaItem.updateTime || mediaItem.createTime || mediaItem.mediaMetadata?.creationTime || null,
@@ -404,12 +369,6 @@ function normalizePickerSessionResource(sessionId) {
 async function fetchPickerResult(sessionId, accessToken) {
   try {
     const sessionResource = normalizePickerSessionResource(sessionId);
-    console.log('Fetching Photos Picker result', {
-      sessionId,
-      sessionResource,
-      accessTokenAvailable: Boolean(accessToken),
-    });
-
     const response = await axios.get(
       'https://photospicker.googleapis.com/v1/sessions/' +
         encodeURIComponent(sessionResource),
@@ -419,11 +378,6 @@ async function fetchPickerResult(sessionId, accessToken) {
         },
       }
     );
-
-    console.log('Photos Picker getResult response', {
-      sessionResource,
-      status: response.status,
-    });
     return response.data;
   } catch (err) {
     const status = err.response?.status;
@@ -442,13 +396,13 @@ async function fetchPickerResult(sessionId, accessToken) {
 
 /**
  * POST /api/drive/picker/status
- * Polls the Google Photos Picker session status. If the user has not completed selection,
- * it returns done: false. Once mediaItemsSet is true, it returns the selected items.
+ * Polls the Google Photos Picker session. Returns done: false until the user
+ * has clicked Done in the picker, plus Google's recommended poll interval.
+ * The selected items are then fetched with /picker/get-items.
  */
 router.post('/picker/status', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
-    console.log('Picker status');
 
     if (!sessionId) {
       console.error('Picker status missing sessionId in request body');
@@ -458,31 +412,18 @@ router.post('/picker/status', requireAuth, async (req, res) => {
     const oAuth2Client = getAuthClient(req.session.tokens);
     const { token: accessToken } = await oAuth2Client.getAccessToken();
     const resultData = await fetchPickerResult(sessionId, accessToken);
+    const pollIntervalSeconds = parseDurationSeconds(resultData.pollingConfig?.pollInterval);
 
-    // console.log('Picker status result data', {
-    //   sessionId,
-    //   mediaItemsSet: resultData.mediaItemsSet,
-    //   mediaItemsLength: Array.isArray(resultData.mediaItems) ? resultData.mediaItems.length : 'not-array',
-    //   resultDataKeys: Object.keys(resultData || {}),
-    //   rawData: resultData,
-    // });
-
-    const mediaItemsSet = resultData.mediaItemsSet === true;
-    const mediaItems = Array.isArray(resultData.mediaItems) ? resultData.mediaItems : [];
-
-    if (!mediaItemsSet) {
-      return res.json({ done: false, mediaItemsSet: false, selectedCount: mediaItems.length });
-    }
-
-    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken, req.session)));
-    return res.json({ done: true, mediaItemsSet: true, selectedCount: mappedItems.length, files: mappedItems });
+    return res.json({
+      done: resultData.mediaItemsSet === true,
+      pollIntervalMs: pollIntervalSeconds > 0 ? Math.round(pollIntervalSeconds * 1000) : null,
+      expireTime: resultData.expireTime || null,
+    });
   } catch (err) {
     const apiMessage = err.response?.data?.error?.message;
     console.error('Photos Picker status error:', {
       sessionId: req.body?.sessionId,
       message: apiMessage || err.message,
-      responseData: err.response?.data,
-      responseHeaders: err.response?.headers,
     });
     return res.status(err.response?.status || 500).json({
       error: apiMessage || 'Failed to fetch Google Photos Picker status',
@@ -490,15 +431,16 @@ router.post('/picker/status', requireAuth, async (req, res) => {
   }
 });
 
+const PICKER_PAGE_SIZE = 100; // the Picker API maximum
+
 /**
  * POST /api/drive/picker/get-items
- * Retrieves the selected media items from the picker session.
- * This endpoint remains available for direct retrieval if needed.
+ * Retrieves every selected media item from the picker session (all pages).
+ * Video sizes are not included; fetch them with /picker/sizes.
  */
 router.post('/picker/get-items', requireAuth, async (req, res) => {
   try {
     const { sessionId } = req.body;
-    console.log('Picker get-items');
 
     if (!sessionId) {
       console.error('Picker get-items missing sessionId in request body');
@@ -507,37 +449,21 @@ router.post('/picker/get-items', requireAuth, async (req, res) => {
 
     const oAuth2Client = getAuthClient(req.session.tokens);
     const { token: accessToken } = await oAuth2Client.getAccessToken();
-
     const sessionResource = normalizePickerSessionResource(sessionId);
-    console.log('Picker get-items fetching result', {
-      sessionId,
-      sessionResource,
-      accessTokenAvailable: Boolean(accessToken),
-    });
 
-    const response = await axios.get(
-      'https://photospicker.googleapis.com/v1/mediaItems',
-      {
-        params: {
-          sessionId: sessionResource
-        },
-        headers: {
-          Authorization: 'Bearer ' + accessToken,
-        },
-      }
-    );
+    // Without paging, Google returns only the first 25 selected items.
+    const mediaItems = [];
+    let pageToken;
+    do {
+      const response = await axios.get('https://photospicker.googleapis.com/v1/mediaItems', {
+        params: { sessionId: sessionResource, pageSize: PICKER_PAGE_SIZE, pageToken },
+        headers: { Authorization: 'Bearer ' + accessToken },
+      });
+      mediaItems.push(...(response.data.mediaItems || []));
+      pageToken = response.data.nextPageToken;
+    } while (pageToken);
 
-    console.log('Photos Picker get-items response', {
-      sessionResource,
-      status: response.status
-    });
-    // console.log('Photos Picker data', JSON.stringify(response.data, null, 2));
-
-    const { mediaItems = [] } = response.data;
-
-    const mappedItems = await Promise.all(mediaItems.map((item) => mapPhotoMediaItem(item, accessToken, req.session)));
-
-    // console.log('Photos Picker mapped data:', JSON.stringify(mappedItems, null, 2));
+    const mappedItems = mediaItems.map((item) => mapPhotoMediaItem(item, req.session));
 
     console.log('Photos Picker items retrieved:', mappedItems.length);
     return res.json({ files: mappedItems });
@@ -546,12 +472,44 @@ router.post('/picker/get-items', requireAuth, async (req, res) => {
     console.error('Photos Picker get-items error:', {
       sessionId: req.body?.sessionId,
       message: apiMessage || err.message,
-      responseData: err.response?.data,
-      responseHeaders: err.response?.headers,
     });
     return res.status(err.response?.status || 500).json({
       error: apiMessage || 'Failed to retrieve selected items from Google Photos Picker',
     });
+  }
+});
+
+const MAX_SIZE_IDS_PER_REQUEST = 10;
+
+/**
+ * POST /api/drive/picker/sizes
+ * Body: { ids: [mediaItemId, ...] } (at most 10)
+ * Looks up the byte size of picked Google Photos videos, using the download
+ * URLs remembered from /picker/get-items. Returns { sizes: { [id]: bytes|null } }.
+ * The frontend calls this in small batches so it can show progress.
+ */
+router.post('/picker/sizes', requireAuth, async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_SIZE_IDS_PER_REQUEST
+    || !ids.every((id) => typeof id === 'string' && id)) {
+    return res.status(400).json({ error: `ids must be an array of 1-${MAX_SIZE_IDS_PER_REQUEST} media item IDs` });
+  }
+
+  try {
+    const oAuth2Client = getAuthClient(req.session.tokens);
+    const { token: accessToken } = await oAuth2Client.getAccessToken();
+    const baseUrls = req.session.photoThumbnailUrls || {};
+
+    const entries = await Promise.all(
+      ids.map(async (id) => {
+        const baseUrl = Object.prototype.hasOwnProperty.call(baseUrls, id) ? baseUrls[id] : null;
+        return [id, await getVideoFileSize(baseUrl, accessToken)];
+      })
+    );
+    return res.json({ sizes: Object.fromEntries(entries) });
+  } catch (err) {
+    console.error('Photos Picker sizes error:', err.message);
+    return res.status(500).json({ error: 'Failed to read Google Photos video sizes' });
   }
 });
 

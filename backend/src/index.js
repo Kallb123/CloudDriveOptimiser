@@ -14,6 +14,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const authRouter = require('./auth');
 const driveRouter = require('./drive');
 const optimiseRouter = require('./optimise');
+const backupCheckRouter = require('./backup-check');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -104,6 +105,7 @@ app.use('/api', apiLimiter);
 app.use('/auth', authRouter);
 app.use('/api/drive', driveRouter);
 app.use('/api/optimise', optimiseRouter);
+app.use('/api/backup-check', backupCheckRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
