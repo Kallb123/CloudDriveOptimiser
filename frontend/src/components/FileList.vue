@@ -19,6 +19,14 @@
         Only latest Google Photos pick ({{ latestPickCount }})
       </label>
       <button
+        v-if="backupEnabled"
+        class="btn btn-secondary"
+        title="Look the videos up in Duplicati again"
+        @click="$emit('recheck-backups')"
+      >
+        Re-check backups
+      </button>
+      <button
         class="btn btn-primary"
         :disabled="selectedFiles.length === 0 || starting"
         @click="$emit('optimise', selectedFiles)"
@@ -44,6 +52,9 @@
       <span v-else>Nothing left to optimise here.</span>
       <span v-if="processedFiles.length > 0" class="summary-muted">
         {{ processedFiles.length }} already processed or in progress
+      </span>
+      <span v-if="backupEnabled && backupSummary" class="summary-muted">
+        Backup: {{ backupSummary }}
       </span>
       <span v-if="selectedFiles.length > 0" class="summary-selected">
         Selected: <strong>{{ selectedFiles.length }}</strong>
@@ -78,6 +89,7 @@
           <th>Name</th>
           <th>Size ▼</th>
           <th title="Rough estimate based on resolution and duration">Est. saving</th>
+          <th v-if="backupEnabled" title="Whether the original is in your Duplicati backup (matched by name and size)">Backup</th>
           <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
@@ -153,6 +165,17 @@
             </td>
             <td class="size-cell">{{ sizeLabel(file) }}</td>
             <td class="saving-cell" title="Rough estimate based on resolution and duration">{{ savingLabel(file) }}</td>
+            <td v-if="backupEnabled" class="backup-cell">
+              <span
+                v-if="backupFor(file)"
+                class="tag backup-tag"
+                :class="`backup-${backupFor(file).state}`"
+                :title="backupFor(file).title"
+              >
+                {{ backupFor(file).label }}
+              </span>
+              <span v-else class="no-thumb">—</span>
+            </td>
             <td class="resolution-cell">{{ fileResolution(file) }}</td>
             <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
             <td class="source-cell">{{ sourceLabel(file.source) }}</td>
@@ -174,6 +197,7 @@
 import { ref, computed, watch } from 'vue'
 import { formatSize, estimateSaving, summariseEstimates } from '../utils/estimate.js'
 import { STATUS_LABELS, fileKey, isJobRetryable } from '../utils/jobs.js'
+import { backupStatus } from '../utils/backup.js'
 
 const props = defineProps({
   files: { type: Array, default: () => [] },
@@ -185,9 +209,12 @@ const props = defineProps({
   settings: { type: Object, default: () => ({ targetHeight: 720, crf: 28 }) },
   // Map of fileKey(source, id) -> latest optimisation job for that file.
   jobsByFile: { type: Map, default: () => new Map() },
+  // Duplicati lookup results by file name (see utils/backup.js)
+  backupEnabled: { type: Boolean, default: false },
+  backupResults: { type: Map, default: () => new Map() },
 })
 
-const emit = defineEmits(['optimise', 'refresh', 'load-more'])
+const emit = defineEmits(['optimise', 'refresh', 'load-more', 'recheck-backups'])
 
 defineExpose({ selectLatestPick })
 
@@ -248,7 +275,26 @@ const sections = computed(() =>
   ].filter((section) => section.files.length > 0)
 )
 
-const columnCount = computed(() => (showThumbnails.value ? 9 : 8))
+const columnCount = computed(() => 8 + (showThumbnails.value ? 1 : 0) + (props.backupEnabled ? 1 : 0))
+
+// e.g. "7 backed up · 2 not in backup" for the videos ready to optimise
+const backupSummary = computed(() => {
+  const counts = {}
+  for (const file of readyFiles.value) {
+    const state = backupFor(file)?.state
+    if (state) counts[state] = (counts[state] || 0) + 1
+  }
+  return [
+    ['backed-up', 'backed up'],
+    ['size-differs', 'size differs'],
+    ['missing', 'not in backup'],
+    ['checking', 'checking…'],
+    ['error', 'check failed'],
+  ]
+    .filter(([state]) => counts[state])
+    .map(([state, label]) => `${counts[state]} ${label}`)
+    .join(' · ')
+})
 
 const readyIds = computed(() =>
   new Set(props.files.filter((f) => f.optimisable && !isProcessed(f)).map((f) => f.id))
@@ -267,6 +313,11 @@ watch(readyIds, (ids) => {
   const kept = selectedIds.value.filter((id) => ids.has(id))
   if (kept.length !== selectedIds.value.length) selectedIds.value = kept
 })
+
+function backupFor(file) {
+  if (!props.backupEnabled || !file.optimisable) return null
+  return backupStatus(file, props.backupResults.get(file.name))
+}
 
 function jobFor(file) {
   return props.jobsByFile.get(fileKey(file.source, file.id)) || null
@@ -531,6 +582,21 @@ function fileResolution(file) {
 .section-processed .saving-cell {
   opacity: 0.7;
 }
+
+.backup-cell {
+  white-space: nowrap;
+}
+
+.backup-tag {
+  margin-left: 0;
+  cursor: help;
+}
+
+.backup-backed-up { background: #c6f6d5; color: #22543d; }
+.backup-size-differs { background: #feebc8; color: #7b341e; }
+.backup-missing { background: #fed7d7; color: #742a2a; }
+.backup-checking,
+.backup-error { background: #edf2f7; color: #718096; }
 
 .size-cell {
   white-space: nowrap;

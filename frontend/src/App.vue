@@ -74,6 +74,11 @@
 
         <div v-if="error" class="alert alert-error">{{ error }}</div>
 
+        <div v-if="backupCheck.enabled && backupCheck.error" class="alert alert-warning" role="alert">
+          <span>Duplicati backup check: {{ backupCheck.error }}</span>
+          <button class="btn btn-sm btn-secondary" @click="recheckBackups">Retry</button>
+        </div>
+
         <FileList
           v-if="analysed"
           ref="fileListRef"
@@ -83,6 +88,9 @@
           :nextPageToken="nextPageToken"
           :settings="defaultSettings"
           :jobsByFile="jobsByFile"
+          :backupEnabled="backupCheck.enabled"
+          :backupResults="backupResults"
+          @recheck-backups="recheckBackups"
           @optimise="openConfirm"
           @refresh="analyseFiles"
           @load-more="loadMore"
@@ -107,6 +115,8 @@
         v-model:replaceOriginals="uploadAfterOptimise"
         :files="confirmFiles"
         :config="config"
+        :backupEnabled="backupCheck.enabled"
+        :backupResults="backupResults"
         @confirm="handleConfirm"
       />
 
@@ -124,7 +134,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import FileList from './components/FileList.vue'
 import JobStatus from './components/JobStatus.vue'
@@ -149,6 +159,12 @@ const jobList = ref([])
 // started before the bump is stale and must not overwrite the newer state.
 let jobsVersion = 0
 const jobsByFile = computed(() => latestJobByFile(jobList.value))
+// Duplicati lookup: whether it's configured, and file name -> lookup state
+// (see utils/backup.js). Names are looked up once, as videos appear.
+const backupCheck = ref({ enabled: false, backups: [], error: null })
+const backupResults = ref(new Map())
+const BACKUP_CHECK_BATCH = 100
+let backupCheckRunning = false
 const photosAlbumUrl = ref(null)
 // jobIds with a cancel/retry/cleanup request in flight (disables their buttons)
 const pendingJobIds = ref(new Set())
@@ -423,6 +439,7 @@ async function logout() {
   files.value = []
   analysed.value = false
   pickSummary.value = null
+  backupResults.value = new Map()
   jobList.value = []
   jobsVersion++
   stopPolling()
@@ -702,6 +719,64 @@ async function clearOptimisationHistory() {
   }
 }
 
+// ---- Duplicati backup check ----
+
+async function loadBackupCheckStatus() {
+  try {
+    const { data } = await axios.get('/api/backup-check/status', { withCredentials: true })
+    backupCheck.value = { enabled: !!data.enabled, backups: data.backups || [], error: data.error || null }
+  } catch (err) {
+    console.warn('Failed to load backup check status', err?.message || err)
+    backupCheck.value = { enabled: false, backups: [], error: null }
+  }
+}
+
+function setBackupEntries(names, entryFor) {
+  const next = new Map(backupResults.value)
+  for (const name of names) next.set(name, entryFor(name))
+  backupResults.value = next
+}
+
+// Looks up every optimisable video whose name hasn't been checked yet. Files
+// added while this runs are picked up by the next loop iteration.
+async function checkBackups({ refresh = false } = {}) {
+  if (!backupCheck.value.enabled || backupCheckRunning) return
+  backupCheckRunning = true
+  try {
+    for (;;) {
+      const names = [...new Set(files.value.filter((file) => file.optimisable).map((file) => file.name))]
+        .filter((name) => name && !/[/\\]/.test(name) && (!backupResults.value.has(name) || backupResults.value.get(name).stale))
+        .slice(0, BACKUP_CHECK_BATCH)
+      if (names.length === 0) break
+
+      setBackupEntries(names, () => ({ checking: true }))
+      try {
+        const { data } = await axios.post('/api/backup-check', { names, refresh }, { withCredentials: true })
+        setBackupEntries(names, (name) => ({ matches: data.results?.[name] || [] }))
+      } catch (err) {
+        const message = err.response?.data?.error || 'Duplicati lookup failed'
+        setBackupEntries(names, () => ({ error: message }))
+        backupCheck.value = { ...backupCheck.value, error: message }
+        break
+      }
+    }
+  } finally {
+    backupCheckRunning = false
+  }
+}
+
+async function recheckBackups() {
+  if (backupCheckRunning) return
+  // Show every row as checking straight away; stale entries are looked up again.
+  const stale = new Map()
+  for (const name of backupResults.value.keys()) stale.set(name, { checking: true, stale: true })
+  backupResults.value = stale
+  await loadBackupCheckStatus()
+  await checkBackups({ refresh: true })
+}
+
+watch(files, () => checkBackups())
+
 // ---- Lifecycle ----
 
 async function loadConfig() {
@@ -748,7 +823,7 @@ onMounted(async () => {
       files.value = mergeFiles([], persistedPhotos)
       await validatePersistedPhotos(persistedPhotos)
     }
-    await Promise.all([loadConfig(), hydrateJobs()])
+    await Promise.all([loadConfig(), hydrateJobs(), loadBackupCheckStatus()])
     await analyseFiles()
   }
 })
@@ -926,6 +1001,13 @@ body {
 .notice-list {
   margin: 0.35rem 0 0 1.1rem;
   line-height: 1.5;
+}
+
+.alert-warning {
+  background: #fffaf0;
+  color: #7b341e;
+  border: 1px solid #feebc8;
+  align-items: center;
 }
 
 .alert-error {

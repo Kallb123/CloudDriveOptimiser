@@ -23,6 +23,7 @@ If quality is a concern, take a backup of the originals elsewhere before optimis
 - **Job tracking** — real-time progress display for each transcoding job
 - **Upload summary** — completed optimisations list the original file size, new file size, capture timestamp, and filenames
 - **Pagination** — load more files on demand
+- **Duplicati backup check** (optional) — looks each video up in your Duplicati backups by name and size, and warns before you replace an original that isn't backed up
 
 ## Architecture
 
@@ -200,6 +201,29 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 9. Once all jobs complete the file list refreshes automatically and the **Optimised Uploads** table shows the original file size, new file size, capture timestamp, and filenames.
 10. Google doesn't let apps delete Google Photos items, so completed Google Photos uploads appear in a **cleanup checklist** showing how many originals (and how much space) are still to remove. For each one, use **Search in Google Photos** to find the original, delete it yourself, then tick **Removed**. Your ticks are saved on the server.
 
+## Duplicati Backup Check (optional)
+
+If your original videos are backed up with [Duplicati](https://duplicati.com/) (for example a phone's camera folder), the app can check each video against those backups for you instead of you searching the Duplicati UI by hand.
+
+1. Make sure the backend can reach the Duplicati web UI (e.g. `http://192.168.1.10:8200`). If Duplicati only accepts certain host names, add the one you use in **Settings → Allowed hostnames** (`--webservice-allowed-hostnames`).
+2. Give the app credentials, either:
+   - **A long-lived token (recommended):** start Duplicati with `--webservice-enable-forever-token`, then on the Duplicati machine run `duplicati-server-util issue-forever-token --hosturl http://localhost:8200 --password <web UI password>` and put the printed token in `DUPLICATI_TOKEN`. Duplicati issues one forever token per server start; afterwards you can remove the option again so no more can be issued.
+   - **Or the web UI password** in `DUPLICATI_PASSWORD`; the app signs in and refreshes its token as needed.
+3. Set `DUPLICATI_URL`, and optionally `DUPLICATI_BACKUP_IDS` to limit which backups are searched (the ID is in the backup's URL in the Duplicati UI), then restart the backend.
+
+A **Backup** column then appears for optimisable videos:
+
+| Status | Meaning |
+|--------|---------|
+| ✓ Backed up | A file with the same name **and** size exists in at least one backup version (hover for the path and date) |
+| Size differs | A file with the same name exists, but no version has the same size (Google Photos may report a slightly different size from the original) |
+| Not in backup | No file with that name in any backup version |
+| Check failed | Duplicati couldn't be reached or refused the credentials |
+
+Files are matched on the file name only (not the folder), case-insensitively, across all backup versions — so a video that has since been deleted from the phone still counts while Duplicati keeps a version holding it. The **Review & confirm** dialog lists any selected videos that aren't confirmed as backed up; this is a warning only and you can still go ahead. Results are cached for 10 minutes; use **Re-check backups** after a new backup run.
+
+This uses the same REST API as Duplicati's own web UI (Duplicati 2.1 and later, which sign in with JWT tokens). It is not a formally versioned public API, so a future Duplicati release could change it.
+
 ## Project Structure
 
 ```
@@ -209,6 +233,7 @@ CloudDriveOptimiser/
 │   │   ├── index.js       # Express app entry point
 │   │   ├── auth.js        # Google OAuth routes
 │   │   ├── drive.js       # Drive + Photos listing & thumbnail proxy
+│   │   ├── backup-check.js # Duplicati backup lookups (optional)
 │   │   └── optimise.js    # Video transcoding pipelines & job tracking
 │   ├── Dockerfile
 │   └── package.json

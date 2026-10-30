@@ -44,6 +44,33 @@
           </span>
         </section>
 
+        <section
+          v-if="backupEnabled && unverified.length > 0"
+          class="backup-warning"
+          role="alert"
+        >
+          <h4>
+            {{ unverified.length }} of {{ files.length }} {{ plural(files.length) }}
+            not confirmed in your Duplicati backup
+          </h4>
+          <ul>
+            <li v-for="item in unverified" :key="`${item.file.source}:${item.file.id}`" :title="item.status?.title">
+              <span class="file-name">{{ item.file.name }}</span>
+              — {{ item.status ? item.status.label : 'Not checked' }}
+            </li>
+          </ul>
+          <p class="hint">
+            <template v-if="replaceOriginals">
+              If you continue, these originals will be replaced without a confirmed backup.
+            </template>
+            <template v-else>Originals won't be changed, as only downloads are being made.</template>
+            You can still go ahead, or cancel and deselect them.
+          </p>
+        </section>
+        <p v-else-if="backupEnabled && files.length > 0" class="backup-ok">
+          ✓ All {{ files.length }} {{ plural(files.length) }} found in your Duplicati backup with a matching size.
+        </p>
+
         <section class="what-happens">
           <h4>What will happen</h4>
           <ul>
@@ -124,12 +151,16 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { formatSize, estimateOptimisedSize, summariseEstimates } from '../utils/estimate.js'
+import { backupStatus } from '../utils/backup.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   files: { type: Array, default: () => [] },
   config: { type: Object, required: true },
   replaceOriginals: { type: Boolean, default: true },
+  // Duplicati lookup results by file name (see utils/backup.js)
+  backupEnabled: { type: Boolean, default: false },
+  backupResults: { type: Map, default: () => new Map() },
 })
 
 const emit = defineEmits(['update:modelValue', 'update:replaceOriginals', 'confirm'])
@@ -168,6 +199,12 @@ const savingPercent = computed(() =>
 )
 const driveCount = computed(() => props.files.filter((f) => f.source !== 'photos').length)
 const photosCount = computed(() => props.files.filter((f) => f.source === 'photos').length)
+// Selected files whose original isn't confirmed (same name and size) in a backup
+const unverified = computed(() =>
+  props.files
+    .map((file) => ({ file, status: backupStatus(file, props.backupResults.get(file.name)) }))
+    .filter((item) => item.status?.state !== 'backed-up')
+)
 const minSaving = computed(() => props.config.minSavingPercent ?? 10)
 
 function plural(n) {
@@ -214,6 +251,37 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <style scoped>
+.backup-warning {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fffaf0;
+  border: 1px solid #feebc8;
+  color: #7b341e;
+}
+
+.backup-warning h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.backup-warning ul {
+  margin: 0 0 0.5rem 1.1rem;
+  font-size: 0.85rem;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.backup-warning .hint {
+  color: #7b341e;
+}
+
+.backup-ok {
+  margin: 1rem 0;
+  color: #22543d;
+  font-size: 0.9rem;
+}
+
 .modal-overlay {
   position: fixed;
   top: 0;
