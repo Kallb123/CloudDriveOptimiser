@@ -120,19 +120,31 @@ async function searchBackup(backup, names) {
     const key = baseName(file.Path).toLowerCase();
     if (!wanted.has(key)) continue;
 
-    // Distinct sizes across versions, each with the newest version holding it.
+    // Distinct sizes across versions, each with how many versions hold it and
+    // the oldest and newest of those versions.
     const sizes = [];
     (file.Sizes || []).forEach((size, index) => {
       if (typeof size !== 'number' || size < 0) return;
       const time = filesets[index]?.Time || null;
-      const existing = sizes.find((entry) => entry.size === size);
-      if (!existing) sizes.push({ size, lastSeen: time });
-      else if (time && (!existing.lastSeen || time > existing.lastSeen)) existing.lastSeen = time;
+      let entry = sizes.find((existing) => existing.size === size);
+      if (!entry) {
+        entry = { size, versions: 0, firstSeen: null, lastSeen: null };
+        sizes.push(entry);
+      }
+      entry.versions += 1;
+      if (time && (!entry.firstSeen || new Date(time) < new Date(entry.firstSeen))) entry.firstSeen = time;
+      if (time && (!entry.lastSeen || new Date(time) > new Date(entry.lastSeen))) entry.lastSeen = time;
     });
     if (sizes.length === 0) continue;
 
     if (!found.has(key)) found.set(key, []);
-    found.get(key).push({ backupId: backup.id, backupName: backup.name, path: file.Path, sizes });
+    found.get(key).push({
+      backupId: backup.id,
+      backupName: backup.name,
+      path: file.Path,
+      totalVersions: filesets.length,
+      sizes,
+    });
   }
   return found;
 }
@@ -207,7 +219,9 @@ router.get('/status', requireAuth, async (req, res) => {
 /**
  * POST /api/backup-check
  * Body: { names: [fileName, ...], refresh?: boolean }
- * Returns { results: { [fileName]: [{ backupName, path, sizes: [{ size, lastSeen }] }] } }.
+ * Returns { results: { [fileName]: [{ backupName, path, totalVersions,
+ *   sizes: [{ size, versions, firstSeen, lastSeen }] }] } },
+ * where versions counts the backup versions holding the file at that size.
  * An empty list means the name wasn't found in any searched backup.
  */
 router.post('/', requireAuth, async (req, res) => {
