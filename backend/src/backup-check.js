@@ -8,7 +8,9 @@
 //   GET  /api/v1/backups                    -> [{ Backup: { ID, Name } }]
 //   GET  /api/v1/backup/{id}/files?filter=…&all-versions=true
 //        -> { Filesets: [{ Version, Time }], Files: [{ Path, Sizes }] }
-// Sizes line up with Filesets; -1 means the file is not in that version.
+// Filesets come back newest first, but each file's Sizes come back oldest
+// first (Duplicati's ORDER BY sits in a joined subquery, which SQLite drops,
+// so rows follow fileset ID order). -1 means the file is not in that version.
 
 const express = require('express');
 const axios = require('axios');
@@ -105,6 +107,12 @@ function buildNameFilter(names) {
   return `[(?i).*[/\\\\](?:${names.map(escapeRegex).join('|')})]`;
 }
 
+// Sortable time for a fileset; missing or unparseable times sort last.
+function timeValue(iso) {
+  const time = iso ? new Date(iso).getTime() : NaN;
+  return Number.isNaN(time) ? Infinity : time;
+}
+
 // Searches one backup for the given names; returns lower-cased name -> matches.
 async function searchBackup(backup, names) {
   const data = await duplicatiGet(`/api/v1/backup/${encodeURIComponent(backup.id)}/files`, {
@@ -112,6 +120,10 @@ async function searchBackup(backup, names) {
     'all-versions': true,
   });
   const filesets = Array.isArray(data?.Filesets) ? data.Filesets : [];
+  // Fileset times in the order Sizes uses: oldest first.
+  const sizeTimes = filesets
+    .map((fileset) => fileset?.Time || null)
+    .sort((a, b) => (timeValue(a) - timeValue(b)) || 0);
   const wanted = new Set(names.map((name) => name.toLowerCase()));
   const found = new Map();
 
@@ -125,7 +137,7 @@ async function searchBackup(backup, names) {
     const sizes = [];
     (file.Sizes || []).forEach((size, index) => {
       if (typeof size !== 'number' || size < 0) return;
-      const time = filesets[index]?.Time || null;
+      const time = sizeTimes[index] || null;
       let entry = sizes.find((existing) => existing.size === size);
       if (!entry) {
         entry = { size, versions: 0, firstSeen: null, lastSeen: null };
