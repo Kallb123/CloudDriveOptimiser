@@ -89,7 +89,7 @@
           <th>Name</th>
           <th>Size ▼</th>
           <th title="Rough estimate based on resolution and duration">Est. saving</th>
-          <th v-if="backupEnabled" title="Whether the original is in your Duplicati backup (matched by name and size)">Backup</th>
+          <th v-if="backupEnabled" title="Whether the original is in your Duplicati backup (matched by name and size), with how many backup versions hold it and since when. Hover a result for the path and dates.">Backup</th>
           <th>Resolution</th>
           <th>Uploaded</th>
           <th>Source</th>
@@ -175,6 +175,13 @@
                 {{ backupFor(file).label }}
               </span>
               <span v-else class="no-thumb">—</span>
+              <div
+                v-if="backupFor(file)?.detail"
+                class="backup-detail"
+                :title="backupFor(file).title"
+              >
+                {{ backupFor(file).detail }}
+              </div>
             </td>
             <td class="resolution-cell">{{ fileResolution(file) }}</td>
             <td class="date-cell">{{ formatDate(file.createdTime) }}</td>
@@ -589,6 +596,13 @@ function fileResolution(file) {
 
 .backup-tag {
   margin-left: 0;
+  cursor: help;
+}
+
+.backup-detail {
+  margin-top: 0.15rem;
+  color: #718096;
+  font-size: 0.75rem;
   cursor: help;
 }
 

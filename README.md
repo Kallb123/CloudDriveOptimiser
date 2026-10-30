@@ -215,12 +215,12 @@ A **Backup** column then appears for optimisable videos:
 
 | Status | Meaning |
 |--------|---------|
-| ✓ Backed up | A file with the same name **and** size exists in at least one backup version (hover for the path and date) |
+| ✓ Backed up | A file with the same name **and** size exists in at least one backup version. Underneath it shows how many versions hold that copy and the date of the earliest one (e.g. `14 versions · since 3 Mar 2025`); hover for the backup, path, version count out of the total, and earliest/latest version dates |
 | Size differs | A file with the same name exists, but no version has the same size (Google Photos may report a slightly different size from the original) |
 | Not in backup | No file with that name in any backup version |
 | Check failed | Duplicati couldn't be reached or refused the credentials |
 
-Files are matched on the file name only (not the folder), case-insensitively, across all backup versions — so a video that has since been deleted from the phone still counts while Duplicati keeps a version holding it. The **Review & confirm** dialog lists any selected videos that aren't confirmed as backed up; this is a warning only and you can still go ahead. Results are cached for 10 minutes; use **Re-check backups** after a new backup run.
+Files are matched on the file name only (not the folder), case-insensitively, across all backup versions — so a video that has since been deleted from the phone still counts while Duplicati keeps a version holding it. The **Review & confirm** dialog lists any selected videos that aren't confirmed as backed up; this is a warning only and you can still go ahead. A match held by many versions over a long period is a strong sign it really is the same file; a single recent version, or other same-named files of a different size (listed in the hover text), are worth a closer look in Duplicati. Results are cached for 10 minutes; use **Re-check backups** after a new backup run.
 
 This uses the same REST API as Duplicati's own web UI (Duplicati 2.1 and later, which sign in with JWT tokens). It is not a formally versioned public API, so a future Duplicati release could change it.
 
