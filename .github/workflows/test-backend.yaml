@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'backend/**'
-      - '.github/workflows/test-backend.yml'
+      - '.github/workflows/test-backend.yaml'
 
 jobs:
   test:
@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - name: Install

@@ -57,7 +57,7 @@ Both services are orchestrated with Docker Compose.
 | Docker Compose | v2 (plugin) |
 | A Google Cloud project | — |
 
-> **Local development only** (without Docker): Node.js ≥ 20 and FFmpeg must be installed on your machine.
+> **Local development only** (without Docker): Node.js ≥ 24 and FFmpeg must be installed on your machine.
 
 ## Google Cloud Setup
 
@@ -152,7 +152,7 @@ Once running, open [http://localhost:80](http://localhost:80) in your browser.
 
 ### Requirements
 
-- Node.js ≥ 20
+- Node.js ≥ 24
 - FFmpeg installed and available in `PATH`
 
 ### Backend
