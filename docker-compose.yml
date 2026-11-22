@@ -31,7 +31,7 @@ services:
         condition: service_healthy
 
   redis:
-    image: redis:7.2
+    image: redis:7.4
     restart: unless-stopped
     ports:
       - "6379:6379"
