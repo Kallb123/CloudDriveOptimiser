@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-slim
 
 # Install ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
